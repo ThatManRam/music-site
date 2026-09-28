@@ -407,9 +407,11 @@ def client_ip():
     return request.remote_addr or "unknown"
 
 
-def rate_limit(bucket_name, maximum, window_seconds):
+def rate_limit(bucket_name, maximum, window_seconds, ip_address=None):
     now = time.monotonic()
-    key = (bucket_name, client_ip())
+    if ip_address is None:
+        ip_address = client_ip()
+    key = (bucket_name, ip_address)
 
     with rate_lock:
         bucket = rate_buckets[key]
@@ -792,6 +794,23 @@ def normalize_title(value):
     return value
 
 
+def title_with_fallback(info, fallback_id=None):
+    """Return a usable filename/title even when yt-dlp provides no title."""
+    if isinstance(info, dict):
+        raw_title = info.get("title")
+        if isinstance(raw_title, str) and raw_title.strip():
+            return clean_filename(raw_title)
+
+        video_id = info.get("id") or fallback_id
+        if video_id:
+            return clean_filename(f"YouTube - {video_id}")
+
+    if fallback_id:
+        return clean_filename(f"YouTube - {fallback_id}")
+
+    return "Untitled"
+
+
 # ---------------------------------------------------------------------------
 # Library
 # ---------------------------------------------------------------------------
@@ -908,7 +927,7 @@ def make_progress_hook(deadline, progress_callback=None):
 
 
 def download_single(info, playlist_name, quality, progress_callback=None):
-    title = clean_filename(info.get("title") or "Unknown")
+    title = title_with_fallback(info)
 
     # Never start an audio download for a track that is 30 minutes or longer.
     # A missing duration is also rejected here; callers should provide the
@@ -1105,7 +1124,7 @@ def classify_ytdlp_error(error, title):
 def download_playlist_entry(entry, playlist_name, quality, progress_callback=None):
     """Extract one playlist entry's metadata and download it independently."""
     entry_id = entry.get("id")
-    title = clean_filename(entry.get("title") or "Unknown")
+    title = title_with_fallback(entry, entry_id)
 
     webpage_url = (
         entry.get("webpage_url")
@@ -1140,7 +1159,7 @@ def download_playlist_entry(entry, playlist_name, quality, progress_callback=Non
             webpage_url, metadata_options
         )
 
-        metadata_title = clean_filename(metadata.get("title") or title)
+        metadata_title = title_with_fallback(metadata, entry_id)
         duration = metadata.get("duration")
 
         if not isinstance(duration, (int, float)):
@@ -1406,7 +1425,7 @@ def extract_youtube_playlist_with_fallback(url, max_items):
             )
 
 
-def download_music(url, playlist_name, quality, job_id=None):
+def download_music(url, playlist_name, quality, job_id=None, ip_address=None):
     validated_url = validate_download_url(url)
     quality = validate_quality(quality)
 
@@ -1427,7 +1446,9 @@ def download_music(url, playlist_name, quality, job_id=None):
     if playlist_name and not playlist_exists(playlist_name):
         return False, "Playlist does not exist."
 
-    if not rate_limit("download", MAX_DOWNLOADS_PER_WINDOW, DOWNLOAD_WINDOW_SECONDS):
+    if not rate_limit(
+        "download", MAX_DOWNLOADS_PER_WINDOW, DOWNLOAD_WINDOW_SECONDS, ip_address
+    ):
         return False, "Too many downloads. Try again later."
 
     if not download_lock.acquire(blocking=False):
@@ -1513,7 +1534,7 @@ def download_music(url, playlist_name, quality, job_id=None):
                         current_percent=percent if percent is not None else 0,
                         current_downloaded=downloaded,
                         current_total=total,
-                        current_title=clean_filename(info.get("title") or "Unknown"),
+                        current_title=title_with_fallback(info),
                     )
 
             ok, message = download_single(
@@ -1551,7 +1572,7 @@ def download_music(url, playlist_name, quality, job_id=None):
         for index, entry in enumerate(entries):
             if job_id:
                 update_download_track(
-                    job_id, index, title=clean_filename(entry.get("title") or "Unknown"),
+                    job_id, index, title=title_with_fallback(entry, entry.get("id")),
                     status="queued", percent=0, downloaded=0, total=0,
                 )
 
@@ -1559,7 +1580,7 @@ def download_music(url, playlist_name, quality, job_id=None):
             futures = {
                 executor.submit(
                     download_playlist_entry, entry, playlist_name, quality,
-                    make_track_progress(index, clean_filename(entry.get("title") or "Unknown")),
+                    make_track_progress(index, title_with_fallback(entry, entry.get("id"))),
                 ): index
                 for index, entry in enumerate(entries)
             }
@@ -1709,9 +1730,15 @@ def start_download():
         return jsonify(error="URL is too long."), 400
 
     job_id = create_download_job()
+    # Capture request data before the background thread starts. Flask's
+    # request context ends when this HTTP handler returns, so the worker
+    # must never call request.remote_addr itself.
+    ip_address = client_ip()
 
     def worker():
-        ok, message = download_music(url, playlist, quality, job_id=job_id)
+        ok, message = download_music(
+            url, playlist, quality, job_id=job_id, ip_address=ip_address
+        )
         update_download_job(
             job_id,
             status="completed" if ok else "error",

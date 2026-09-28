@@ -1,0 +1,47 @@
+[Unit]
+Description=Hardened LAN Music Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ram
+Group=ram
+WorkingDirectory=/opt/music-downloader
+EnvironmentFile=/etc/music-downloader/music-server.env
+
+ExecStart=/opt/music-downloader/venv/bin/gunicorn \
+    --workers 1 \
+    --threads 4 \
+    --bind 0.0.0.0:5000 \
+    --access-logfile - \
+    --error-logfile - \
+    app:app
+
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# The application must be able to write its state and music.
+ReadWritePaths=/var/lib/music-downloader
+ReadWritePaths=/run/media/ram/CENMATE_250GB/music
+ReadWritePaths=/run/media/ram/CENMATE_640GB/music
+
+# Allow read/write access to the executable environment.
+ReadOnlyPaths=/opt/music-downloader
+
+[Install]
+WantedBy=multi-user.target

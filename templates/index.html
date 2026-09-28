@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Music Downloader</title>
+<style>
+body{margin:0;background:#101216;color:#eee;font-family:system-ui,sans-serif}
+main{max-width:900px;margin:auto;padding:20px}
+.card{background:#181b21;padding:20px;border-radius:14px;margin:14px 0}
+input,select,button{padding:11px;border-radius:8px;border:1px solid #383d48;background:#0e1014;color:#fff}
+input,select{width:100%;box-sizing:border-box;margin:6px 0 14px}
+button{cursor:pointer;background:#2b6df3;border:0}
+button.danger{background:#a52b2b}
+a{color:#80aaff}
+nav{display:flex;gap:16px;flex-wrap:wrap}
+.message{padding:10px;border-radius:8px;margin:8px 0}.success{background:#183d28}.error{background:#4b2020}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+</style>
+</head>
+<body>
+<main>
+<nav>
+<a href="{{ url_for('index') }}">Downloader</a>
+<a href="{{ url_for('player') }}">Player</a>
+<a href="{{ url_for('library') }}">Library</a>
+<form method="post" action="{{ url_for('logout') }}" style="display:inline">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<button type="submit">Log out</button>
+</form>
+</nav>
+
+<h1>Music Downloader</h1>
+
+{% if download_notice %}
+<div class="message {{ download_notice[0] }}">{{ download_notice[1] }}</div>
+{% endif %}
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% for category, message in messages %}
+<div class="message {{ category }}">{{ message }}</div>
+{% endfor %}
+{% endwith %}
+
+<section class="card">
+<h2>Download</h2>
+<form method="post" action="{{ url_for('start_download') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+<label for="url">YouTube or SoundCloud URL</label>
+<input id="url" name="url" type="url" maxlength="2048"
+       placeholder="https://..." autocomplete="off" required>
+
+<label for="quality">MP3 quality</label>
+<select id="quality" name="quality" required>
+<option value="128">128 kbps</option>
+<option value="192" selected>192 kbps</option>
+<option value="256">256 kbps</option>
+<option value="320">320 kbps</option>
+</select>
+
+<label for="playlist">Playlist</label>
+<select id="playlist" name="playlist">
+<option value="">Auto-create from YouTube playlist title</option>
+{% for playlist in playlists %}
+<option value="{{ playlist }}">{{ playlist }}</option>
+{% endfor %}
+</select>
+<p>For a YouTube playlist URL, the app automatically uses the YouTube playlist title and creates the local playlist. For a single track, select a destination playlist.</p>
+
+<button type="submit">Download</button>
+</form>
+</section>
+
+<section class="card">
+<h2>Create playlist</h2>
+<input id="playlistName" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9 _()'&amp;.-]{0,63}">
+<button id="createPlaylist" type="button">Create</button>
+<p id="playlistMessage"></p>
+</section>
+
+<section class="card">
+<h2>Storage</h2>
+<div class="grid">
+{% for item in storage %}
+<div>
+<strong>Drive {{ item.index + 1 }}</strong>
+<p>{{ item.path }}</p>
+<p>{{ item.free }} free / {{ item.total }}</p>
+</div>
+{% endfor %}
+</div>
+</section>
+
+<script nonce="{{ csp_nonce }}">
+const csrfToken = {{ csrf_token|tojson }};
+
+document.getElementById("createPlaylist").addEventListener("click", async () => {
+    const input = document.getElementById("playlistName");
+    const message = document.getElementById("playlistMessage");
+    const name = input.value.trim();
+
+    if (!name || name.length > 64) {
+        message.textContent = "Enter a valid playlist name.";
+        return;
+    }
+
+    const response = await fetch("{{ url_for('create_playlist_route') }}", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken
+        },
+        body: JSON.stringify({name})
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+        message.textContent = data.message;
+        window.location.reload();
+    } else {
+        message.textContent = data.error || "Could not create playlist.";
+    }
+});
+</script>
+</main>
+</body>
+</html>

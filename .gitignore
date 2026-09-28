@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.env
+state/
+
+cookies.txt
+*.cookies
+*.cookies.txt
+
+state/notices/

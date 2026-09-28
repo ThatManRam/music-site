@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Music Server Login</title>
+<style>
+body{margin:0;background:#101216;color:#eee;font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}
+.card{width:min(420px,calc(100% - 32px));background:#181b21;padding:28px;border-radius:16px;box-sizing:border-box}
+input,button{width:100%;box-sizing:border-box;padding:12px;margin-top:8px;border-radius:8px;border:1px solid #383d48;background:#0e1014;color:#fff}
+button{cursor:pointer;background:#2b6df3;border:0;margin-top:18px}
+.error{background:#4b2020;padding:10px;border-radius:8px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<main class="card">
+<h1>Music Server</h1>
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% for category, message in messages %}
+<div class="{{ category }}">{{ message }}</div>
+{% endfor %}
+{% endwith %}
+<form method="post" autocomplete="on">
+<label>Username</label>
+<input name="username" maxlength="128" autocomplete="username" required>
+<label>Password</label>
+<input type="password" name="password" maxlength="1024" autocomplete="current-password" required>
+<button type="submit">Sign in</button>
+</form>
+</main>
+</body>
+</html>

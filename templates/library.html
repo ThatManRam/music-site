@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Music Library</title>
+<style>
+body{margin:0;background:#101216;color:#eee;font-family:system-ui,sans-serif}
+main{max-width:1000px;margin:auto;padding:20px}
+nav{display:flex;gap:16px;flex-wrap:wrap}
+a{color:#80aaff}
+.card{background:#181b21;padding:18px;border-radius:14px;margin:14px 0}
+.song{padding:10px;border-bottom:1px solid #30343d}
+</style>
+</head>
+<body>
+<main>
+<nav>
+<a href="{{ url_for('index') }}">Downloader</a>
+<a href="{{ url_for('player') }}">Player</a>
+<a href="{{ url_for('library') }}">Library</a>
+<form method="post" action="{{ url_for('logout') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<button type="submit">Log out</button>
+</form>
+</nav>
+
+<h1>Library</h1>
+
+<div class="card search-card">
+<label for="librarySearch">Search your library</label>
+<input id="librarySearch" type="search" maxlength="100" placeholder="Search songs or playlists..." autocomplete="off">
+<p id="librarySearchStatus"></p>
+</div>
+
+{% for name, songs in playlists.items() %}
+<section class="card playlist-card" data-playlist-name="{{ name|e }}">
+<h2>{{ name }}</h2>
+{% if songs %}
+{% for song in songs %}
+<div class="song" data-song-title="{{ song.title|e }}">
+<strong>{{ song.title }}</strong>
+<div>{{ song.size }} · Drive {{ song.drive_index + 1 }}</div>
+<audio controls preload="none" src="{{ song.url }}"></audio>
+</div>
+{% endfor %}
+{% else %}
+<p>Empty playlist.</p>
+{% endif %}
+</section>
+{% endfor %}
+<script nonce="{{ csp_nonce }}">
+const librarySearch = document.getElementById("librarySearch");
+const libraryStatus = document.getElementById("librarySearchStatus");
+const playlistCards = Array.from(document.querySelectorAll(".playlist-card"));
+
+function filterLibrary() {
+    const query = librarySearch.value.trim().toLocaleLowerCase();
+    let visibleSongs = 0;
+    let visiblePlaylists = 0;
+
+    for (const card of playlistCards) {
+        const playlistName = (card.dataset.playlistName || "").toLocaleLowerCase();
+        const songs = Array.from(card.querySelectorAll(".song"));
+        let cardSongs = 0;
+
+        for (const song of songs) {
+            const title = (song.dataset.songTitle || "").toLocaleLowerCase();
+            const matches = !query || playlistName.includes(query) || title.includes(query);
+            song.hidden = !matches;
+            if (matches) {
+                cardSongs += 1;
+            }
+        }
+
+        const showCard = !query || playlistName.includes(query) || cardSongs > 0;
+        card.hidden = !showCard;
+        if (showCard) {
+            visiblePlaylists += 1;
+            visibleSongs += cardSongs;
+        }
+    }
+
+    if (query) {
+        libraryStatus.textContent = `${visibleSongs} song${visibleSongs === 1 ? "" : "s"} in ${visiblePlaylists} playlist${visiblePlaylists === 1 ? "" : "s"} found.`;
+    } else {
+        libraryStatus.textContent = "";
+    }
+}
+
+librarySearch.addEventListener("input", filterLibrary);
+</script>
+</main>
+</body>
+</html>

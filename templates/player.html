@@ -16,8 +16,26 @@ button.danger{background:#a52b2b}
 #songList{display:grid;gap:8px}
 .song{padding:12px;background:#0e1014;border-radius:9px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .song-title{flex:1;min-width:180px}
-audio{width:100%;margin:14px 0}
+audio{width:100%;margin:10px 0}
+.player-dock{position:sticky;top:0;z-index:20;background:#181b21;border:1px solid #2d323c;border-radius:14px;padding:14px;margin:14px 0;box-shadow:0 6px 18px rgba(0,0,0,.28)}
 .controls{display:flex;gap:8px;flex-wrap:wrap}
+.controls button{min-height:44px}
+.song.playing{outline:2px solid #32b85a;background:#13251a}
+.song.playing .play-button{background:#24a148}
+.song.play-button{background:#2b6df3}
+@media (max-width:600px){
+  main{padding:10px}
+  .card{padding:12px}
+  .player-dock{top:0;margin:8px 0 14px;padding:10px}
+  .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .controls button{width:100%;min-height:48px;font-size:16px}
+  #playPause{grid-column:1 / -1}
+  .song{align-items:stretch}
+  .song-title{min-width:0;width:100%}
+  .song .play-button{flex:1;min-height:44px}
+  .song select,.song .move-button{min-height:44px}
+}
+
 </style>
 </head>
 <body>
@@ -48,6 +66,8 @@ audio{width:100%;margin:14px 0}
 <input id="songSearch" type="search" maxlength="100" placeholder="Search songs..." autocomplete="off">
 <p id="songSearchStatus"></p>
 
+<div class="player-dock">
+<p id="nowPlaying">Nothing playing</p>
 <audio id="audio" controls preload="metadata"></audio>
 
 <div class="controls">
@@ -57,8 +77,7 @@ audio{width:100%;margin:14px 0}
 <button id="loopToggle" type="button" aria-pressed="false">Loop: Off</button>
 <button id="autoplayToggle" type="button" aria-pressed="true">Autoplay: On</button>
 </div>
-
-<p id="nowPlaying">Nothing playing</p>
+</div>
 <div id="songList"></div>
 </section>
 
@@ -124,9 +143,18 @@ function renderSongs() {
         title.className = "song-title";
         title.textContent = song.title;
 
+        const isPlaying = currentSongs[index] === currentSongs[currentIndex] &&
+            audio.src && !audio.paused;
+
+        if (isPlaying) {
+            row.classList.add("playing");
+        }
+
         const play = document.createElement("button");
         play.type = "button";
-        play.textContent = "Play";
+        play.className = "play-button";
+        play.textContent = isPlaying ? "Playing" : "Play";
+        play.setAttribute("aria-pressed", String(isPlaying));
         play.addEventListener("click", () => playSong(index));
 
         const moveSelect = document.createElement("select");
@@ -142,6 +170,7 @@ function renderSongs() {
 
         const move = document.createElement("button");
         move.type = "button";
+        move.className = "move-button";
         move.textContent = "Move";
         move.addEventListener("click", () => moveSong(song, moveSelect.value));
 
@@ -160,8 +189,9 @@ function playSong(index) {
 
     audio.src = song.url;
     audio.play().catch(() => {});
-    nowPlaying.textContent = song.title;
+    nowPlaying.textContent = "Now playing: " + song.title;
     updateMediaSession(song);
+    renderSongs();
 }
 
 function nextSong() {
@@ -376,12 +406,14 @@ audio.addEventListener("play", () => {
     if ("mediaSession" in navigator) {
         navigator.mediaSession.playbackState = "playing";
     }
+    renderSongs();
 });
 
 audio.addEventListener("pause", () => {
     if ("mediaSession" in navigator) {
         navigator.mediaSession.playbackState = "paused";
     }
+    renderSongs();
 });
 
 renderSongs();

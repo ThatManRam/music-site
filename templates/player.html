@@ -54,6 +54,8 @@ audio{width:100%;margin:14px 0}
 <button id="previous" type="button">Previous</button>
 <button id="playPause" type="button">Play / Pause</button>
 <button id="next" type="button">Next</button>
+<button id="loopToggle" type="button" aria-pressed="false">Loop: Off</button>
+<button id="autoplayToggle" type="button" aria-pressed="true">Autoplay: On</button>
 </div>
 
 <p id="nowPlaying">Nothing playing</p>
@@ -70,8 +72,11 @@ const list = document.getElementById("songList");
 const songSearch = document.getElementById("songSearch");
 const songSearchStatus = document.getElementById("songSearchStatus");
 const nowPlaying = document.getElementById("nowPlaying");
+const loopToggle = document.getElementById("loopToggle");
+const autoplayToggle = document.getElementById("autoplayToggle");
 let currentIndex = 0;
 let currentSongs = [];
+let autoplayEnabled = true;
 
 for (const name of Object.keys(playlists)) {
     const option = document.createElement("option");
@@ -252,7 +257,24 @@ document.getElementById("playPause").addEventListener("click", () => {
 
 document.getElementById("next").addEventListener("click", nextSong);
 document.getElementById("previous").addEventListener("click", previousSong);
-audio.addEventListener("ended", nextSong);
+
+audio.addEventListener("ended", () => {
+    if (autoplayEnabled && !audio.loop) {
+        nextSong();
+    }
+});
+
+loopToggle.addEventListener("click", () => {
+    audio.loop = !audio.loop;
+    loopToggle.setAttribute("aria-pressed", String(audio.loop));
+    loopToggle.textContent = audio.loop ? "Loop: On" : "Loop: Off";
+});
+
+autoplayToggle.addEventListener("click", () => {
+    autoplayEnabled = !autoplayEnabled;
+    autoplayToggle.setAttribute("aria-pressed", String(autoplayEnabled));
+    autoplayToggle.textContent = autoplayEnabled ? "Autoplay: On" : "Autoplay: Off";
+});
 
 document.getElementById("createButton").addEventListener("click", async () => {
     const input = document.getElementById("newPlaylist");

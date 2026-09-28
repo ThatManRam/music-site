@@ -42,12 +42,11 @@ STATE_DIR.mkdir(parents=True, exist_ok=True)
 DOWNLOAD_ARCHIVE = STATE_DIR / "downloads.txt"
 NOTICE_DIR = STATE_DIR / "notices"
 NOTICE_DIR.mkdir(parents=True, exist_ok=True)
-MUSIC_LOCATIONS = [
-    Path(path).expanduser().resolve()
-    for path in os.environ.get("MUSIC_PATHS", "").split(":")
-    if path.strip()
-]
 
+MUSIC_LOCATIONS = [
+    Path("/run/media/ram/CENMATE_250GB/music").resolve(),
+    Path("/run/media/ram/CENMATE_640GB/music").resolve(),
+]
 
 SINGLES_FOLDER = "Singles"
 

@@ -189,3 +189,12 @@ For a systemd deployment, verbose yt-dlp output will appear in:
 ```bash
 sudo journalctl -u music-site -f
 ```
+
+## Library behavior
+
+The Library page does not load every MP3 when it opens. It first loads only the available playlist names, then fetches the songs for the selected playlist on demand.
+
+Songs in the selected playlist can be renamed or deleted from the Library page. Rename keeps the `.mp3` extension controlled by the server and stays inside the current playlist directory. Delete permanently removes the selected MP3 after confirmation.
+
+The Player page still uses the complete library view because it is intended to expose the combined player library.
+

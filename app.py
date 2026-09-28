@@ -891,66 +891,76 @@ def title_with_fallback(info, fallback_id=None):
 # Library
 # ---------------------------------------------------------------------------
 
-def get_library():
-    playlists = {}
+def get_library_playlist(playlist_name):
+    """Load only one playlist from the music library.
+
+    The old get_library() implementation scanned every playlist and every MP3
+    whenever the library page was opened.  For large libraries that made the
+    initial page unnecessarily expensive.  This function scans only the
+    playlist the user selected, across all configured music drives.
+    """
+    playlist_name = validate_playlist_name(playlist_name)
+    if not playlist_name:
+        return []
+
+    songs = []
 
     for drive_index, root in enumerate(MUSIC_LOCATIONS):
+        directory = playlist_path(drive_index, playlist_name)
+
+        if not directory or not directory.is_dir() or directory.is_symlink():
+            continue
+
         try:
-            entries = list(root.iterdir())
+            entries = list(directory.iterdir())
         except OSError:
             continue
 
-        for directory in entries:
-            if not directory.is_dir() or directory.is_symlink():
+        for song in entries:
+            if not song.is_file() or song.is_symlink():
                 continue
 
-            playlist = validate_playlist_name(directory.name)
-
-            if not playlist:
+            if song.suffix.casefold() != ".mp3":
                 continue
-
-            playlists.setdefault(playlist, [])
 
             try:
-                songs = list(directory.iterdir())
+                size = song.stat().st_size
             except OSError:
                 continue
 
-            for song in songs:
-                if not song.is_file() or song.is_symlink():
-                    continue
+            if size > MAX_AUDIO_FILE_BYTES:
+                continue
 
-                if song.suffix.casefold() != ".mp3":
-                    continue
+            relative = f"{playlist_name}/{song.name}"
 
-                try:
-                    size = song.stat().st_size
-                except OSError:
-                    continue
+            songs.append({
+                "title": song.stem,
+                "filename": song.name,
+                "path": relative,
+                "drive_index": drive_index,
+                "size": format_bytes(size),
+                "size_bytes": size,
+                "url": url_for(
+                    "serve_music",
+                    drive_index=drive_index,
+                    filename=relative,
+                ),
+            })
 
-                if size > MAX_AUDIO_FILE_BYTES:
-                    continue
+    songs.sort(key=lambda item: (item["title"].casefold(), item["drive_index"]))
+    return songs
 
-                relative = f"{playlist}/{song.name}"
 
-                playlists[playlist].append({
-                    "title": song.stem,
-                    "filename": song.name,
-                    "path": relative,
-                    "drive_index": drive_index,
-                    "size": format_bytes(size),
-                    "size_bytes": size,
-                    "url": url_for(
-                        "serve_music",
-                        drive_index=drive_index,
-                        filename=relative,
-                    ),
-                })
+def get_library():
+    """Compatibility helper for the player page.
 
-    for songs in playlists.values():
-        songs.sort(key=lambda item: item["title"].casefold())
-
-    return dict(sorted(playlists.items(), key=lambda item: item[0].casefold()))
+    The player still needs the complete library because it is designed as a
+    combined player view. The /library page deliberately does not call this.
+    """
+    return {
+        name: get_library_playlist(name)
+        for name in get_playlist_names()
+    }
 
 
 def find_existing_song(title, playlist_name):
@@ -1864,10 +1874,149 @@ def player():
 @app.get("/library")
 @login_required
 def library():
+    # Do not scan every MP3 here. The browser loads one selected playlist
+    # through /api/library/<playlist_name> after the user chooses it.
     return render_template(
         "library.html",
-        playlists=get_library(),
+        playlist_names=get_playlist_names(),
         storage=get_storage_info(),
+    )
+
+
+@app.get("/api/library/<path:playlist_name>")
+@login_required
+def library_playlist_api(playlist_name):
+    """Return songs for exactly one selected playlist."""
+    playlist_name = validate_playlist_name(playlist_name)
+
+    if not playlist_name:
+        return jsonify(error="Invalid playlist name."), 400
+
+    if not playlist_exists(playlist_name):
+        return jsonify(error="Playlist does not exist."), 404
+
+    try:
+        songs = get_library_playlist(playlist_name)
+    except Exception:
+        app.logger.exception("Library playlist loading failed: %s", playlist_name)
+        return jsonify(error="Could not load playlist."), 500
+
+    return jsonify(playlist=playlist_name, songs=songs)
+
+
+@app.post("/api/library/song/delete")
+@login_required
+def delete_library_song():
+    """Delete one MP3 after validating its drive and library-relative path."""
+    if not rate_limit("library-song-delete", 30, 60):
+        return jsonify(error="Too many requests."), 429
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="JSON object required."), 400
+
+    drive_index = validate_drive_index(data.get("drive_index"))
+    relative_path = validate_song_path(data.get("path"))
+
+    if drive_index is None:
+        return jsonify(error="Invalid drive."), 400
+    if not relative_path:
+        return jsonify(error="Invalid song path."), 400
+
+    root = MUSIC_LOCATIONS[drive_index]
+    song = safe_path_under(root, relative_path)
+
+    if not song or not song.is_file() or song.is_symlink():
+        return jsonify(error="Song does not exist."), 404
+
+    if song.suffix.casefold() != ".mp3":
+        return jsonify(error="Only MP3 files can be deleted."), 400
+
+    try:
+        song.unlink()
+    except OSError:
+        app.logger.exception("Song deletion failed: %s", relative_path)
+        return jsonify(error="Could not delete song."), 500
+
+    return jsonify(message="Song deleted successfully.")
+
+
+@app.post("/api/library/song/rename")
+@login_required
+def rename_library_song():
+    """Rename one MP3 without allowing the destination to leave its playlist."""
+    if not rate_limit("library-song-rename", 30, 60):
+        return jsonify(error="Too many requests."), 429
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="JSON object required."), 400
+
+    drive_index = validate_drive_index(data.get("drive_index"))
+    relative_path = validate_song_path(data.get("path"))
+    requested_name = data.get("name")
+
+    if drive_index is None:
+        return jsonify(error="Invalid drive."), 400
+    if not relative_path:
+        return jsonify(error="Invalid song path."), 400
+    if not isinstance(requested_name, str):
+        return jsonify(error="Song name must be text."), 400
+
+    requested_name = requested_name.strip()
+    if requested_name.lower().endswith(".mp3"):
+        requested_name = requested_name[:-4]
+
+    # Reuse the filename sanitizer, then require a non-empty result. The
+    # extension is always controlled by the server.
+    new_stem = clean_filename(requested_name)
+    if not new_stem or new_stem.casefold() in {".", ".."}:
+        return jsonify(error="Invalid song name."), 400
+
+    root = MUSIC_LOCATIONS[drive_index]
+    song = safe_path_under(root, relative_path)
+
+    if not song or not song.is_file() or song.is_symlink():
+        return jsonify(error="Song does not exist."), 404
+
+    if song.suffix.casefold() != ".mp3":
+        return jsonify(error="Only MP3 files can be renamed."), 400
+
+    destination = safe_path_under(song.parent, new_stem + ".mp3")
+    if not destination:
+        return jsonify(error="Invalid destination name."), 400
+
+    if destination == song:
+        return jsonify(
+            message="Song name is unchanged.",
+            title=song.stem,
+            filename=song.name,
+            path=relative_path,
+        )
+
+    if destination.exists():
+        return jsonify(error="A song with that name already exists."), 409
+
+    try:
+        song.rename(destination)
+    except OSError:
+        app.logger.exception("Song rename failed: %s", relative_path)
+        return jsonify(error="Could not rename song."), 500
+
+    new_relative_path = str(Path(relative_path).parent / destination.name)
+    if new_relative_path.startswith("."):
+        new_relative_path = destination.name
+
+    return jsonify(
+        message="Song renamed successfully.",
+        title=destination.stem,
+        filename=destination.name,
+        path=new_relative_path,
+        url=url_for(
+            "serve_music",
+            drive_index=drive_index,
+            filename=new_relative_path,
+        ),
     )
 
 

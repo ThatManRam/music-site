@@ -6,11 +6,33 @@
 <title>Music Library</title>
 <style>
 body{margin:0;background:#101216;color:#eee;font-family:system-ui,sans-serif}
-main{max-width:1000px;margin:auto;padding:20px}
-nav{display:flex;gap:16px;flex-wrap:wrap}
+main{max-width:1100px;margin:auto;padding:20px}
+nav{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:24px}
 a{color:#80aaff}
+button,input,select{font:inherit}
+button{cursor:pointer}
 .card{background:#181b21;padding:18px;border-radius:14px;margin:14px 0}
-.song{padding:10px;border-bottom:1px solid #30343d}
+.controls{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:end}
+label{display:block;font-weight:600;margin-bottom:6px}
+input,select{box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #3b404a;border-radius:9px;background:#0e1014;color:#eee}
+.primary{padding:10px 14px;border:0;border-radius:9px;background:#3478f6;color:white}
+.danger{padding:8px 11px;border:1px solid #7b3030;border-radius:8px;background:#35191b;color:#ffb4b4}
+.secondary{padding:8px 11px;border:1px solid #454b56;border-radius:8px;background:#22262d;color:#eee}
+.status{min-height:1.3em;color:#aeb6c3}
+.song{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:14px 0;border-bottom:1px solid #30343d;align-items:center}
+.song:last-child{border-bottom:0}
+.song-title{font-weight:650;overflow-wrap:anywhere}
+.song-meta{font-size:.9rem;color:#aeb6c3;margin-top:4px}
+.song-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+audio{width:100%;max-width:560px;margin-top:9px}
+.empty{color:#aeb6c3;padding:20px 0}
+.hidden{display:none}
+@media(max-width:700px){
+  main{padding:14px}
+  .controls{grid-template-columns:1fr}
+  .song{grid-template-columns:1fr}
+  .song-actions{justify-content:flex-start}
+}
 </style>
 </head>
 <body>
@@ -21,74 +43,231 @@ a{color:#80aaff}
 <a href="{{ url_for('library') }}">Library</a>
 <form method="post" action="{{ url_for('logout') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-<button type="submit">Log out</button>
+<button class="secondary" type="submit">Log out</button>
 </form>
 </nav>
 
-<h1>Library</h1>
+<h1>Music Library</h1>
+<p>Select a playlist to load its songs. The library no longer loads every playlist at once.</p>
 
-<div class="card search-card">
-<label for="librarySearch">Search your library</label>
-<input id="librarySearch" type="search" maxlength="100" placeholder="Search songs or playlists..." autocomplete="off">
-<p id="librarySearchStatus"></p>
-</div>
-
-{% for name, songs in playlists.items() %}
-<section class="card playlist-card" data-playlist-name="{{ name|e }}">
-<h2>{{ name }}</h2>
-{% if songs %}
-{% for song in songs %}
-<div class="song" data-song-title="{{ song.title|e }}">
-<strong>{{ song.title }}</strong>
-<div>{{ song.size }} · Drive {{ song.drive_index + 1 }}</div>
-<audio controls preload="none" src="{{ song.url }}"></audio>
-</div>
+<section class="card">
+<div class="controls">
+<div>
+<label for="playlistSelect">Playlist</label>
+<select id="playlistSelect">
+<option value="">Choose a playlist...</option>
+{% for name in playlist_names %}
+<option value="{{ name }}">{{ name }}</option>
 {% endfor %}
-{% else %}
-<p>Empty playlist.</p>
-{% endif %}
+</select>
+</div>
+<button id="loadButton" class="primary" type="button">Load playlist</button>
+</div>
+<p id="libraryStatus" class="status" aria-live="polite"></p>
 </section>
-{% endfor %}
+
+<section id="playlistCard" class="card hidden">
+<h2 id="playlistTitle"></h2>
+<div id="songList"></div>
+</section>
+
 <script nonce="{{ csp_nonce }}">
-const librarySearch = document.getElementById("librarySearch");
-const libraryStatus = document.getElementById("librarySearchStatus");
-const playlistCards = Array.from(document.querySelectorAll(".playlist-card"));
+const csrfToken = {{ csrf_token|tojson }};
+const playlistSelect = document.getElementById("playlistSelect");
+const loadButton = document.getElementById("loadButton");
+const libraryStatus = document.getElementById("libraryStatus");
+const playlistCard = document.getElementById("playlistCard");
+const playlistTitle = document.getElementById("playlistTitle");
+const songList = document.getElementById("songList");
 
-function filterLibrary() {
-    const query = librarySearch.value.trim().toLocaleLowerCase();
-    let visibleSongs = 0;
-    let visiblePlaylists = 0;
+function setStatus(message) {
+    libraryStatus.textContent = message || "";
+}
 
-    for (const card of playlistCards) {
-        const playlistName = (card.dataset.playlistName || "").toLocaleLowerCase();
-        const songs = Array.from(card.querySelectorAll(".song"));
-        let cardSongs = 0;
+function apiOptions() {
+    return {
+        headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken,
+        },
+        credentials: "same-origin",
+    };
+}
 
-        for (const song of songs) {
-            const title = (song.dataset.songTitle || "").toLocaleLowerCase();
-            const matches = !query || playlistName.includes(query) || title.includes(query);
-            song.hidden = !matches;
-            if (matches) {
-                cardSongs += 1;
-            }
-        }
+function createButton(text, className) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = text;
+    return button;
+}
 
-        const showCard = !query || playlistName.includes(query) || cardSongs > 0;
-        card.hidden = !showCard;
-        if (showCard) {
-            visiblePlaylists += 1;
-            visibleSongs += cardSongs;
-        }
+function renderSongs(songs) {
+    songList.replaceChildren();
+
+    if (!songs.length) {
+        const empty = document.createElement("p");
+        empty.className = "empty";
+        empty.textContent = "This playlist is empty.";
+        songList.appendChild(empty);
+        return;
     }
 
-    if (query) {
-        libraryStatus.textContent = `${visibleSongs} song${visibleSongs === 1 ? "" : "s"} in ${visiblePlaylists} playlist${visiblePlaylists === 1 ? "" : "s"} found.`;
-    } else {
-        libraryStatus.textContent = "";
+    for (const song of songs) {
+        const row = document.createElement("article");
+        row.className = "song";
+        row.dataset.path = song.path;
+        row.dataset.driveIndex = String(song.drive_index);
+
+        const details = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "song-title";
+        title.textContent = song.title;
+        details.appendChild(title);
+
+        const meta = document.createElement("div");
+        meta.className = "song-meta";
+        meta.textContent = `${song.size} · Drive ${song.drive_index + 1}`;
+        details.appendChild(meta);
+
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.preload = "none";
+        audio.src = song.url;
+        details.appendChild(audio);
+
+        const actions = document.createElement("div");
+        actions.className = "song-actions";
+
+        const renameButton = createButton("Rename", "secondary");
+        renameButton.addEventListener("click", () => renameSong(row, song));
+        actions.appendChild(renameButton);
+
+        const deleteButton = createButton("Delete", "danger");
+        deleteButton.addEventListener("click", () => deleteSong(row, song));
+        actions.appendChild(deleteButton);
+
+        row.appendChild(details);
+        row.appendChild(actions);
+        songList.appendChild(row);
     }
 }
 
-librarySearch.addEventListener("input", filterLibrary);
+async function loadPlaylist() {
+    const name = playlistSelect.value;
+    if (!name) {
+        playlistCard.classList.add("hidden");
+        setStatus("Choose a playlist first.");
+        return;
+    }
+
+    loadButton.disabled = true;
+    setStatus(`Loading ${name}...`);
+
+    try {
+        const response = await fetch(`/api/library/${encodeURIComponent(name)}`, {
+            credentials: "same-origin",
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Could not load playlist.");
+        }
+
+        playlistTitle.textContent = `${data.playlist} (${data.songs.length} song${data.songs.length === 1 ? "" : "s"})`;
+        renderSongs(data.songs);
+        playlistCard.classList.remove("hidden");
+        setStatus(`Loaded ${data.songs.length} song${data.songs.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+        playlistCard.classList.add("hidden");
+        setStatus(error.message || "Could not load playlist.");
+    } finally {
+        loadButton.disabled = false;
+    }
+}
+
+async function renameSong(row, song) {
+    const currentName = song.title;
+    const newName = window.prompt("New song name:", currentName);
+
+    if (newName === null) {
+        return;
+    }
+
+    const trimmed = newName.trim();
+    if (!trimmed) {
+        setStatus("Song name cannot be empty.");
+        return;
+    }
+
+    try {
+        const response = await fetch("{{ url_for('rename_library_song') }}", {
+            method: "POST",
+            ...apiOptions(),
+            body: JSON.stringify({
+                drive_index: song.drive_index,
+                path: song.path,
+                name: trimmed,
+            }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Could not rename song.");
+        }
+
+        song.title = data.title;
+        song.filename = data.filename;
+        song.path = data.path;
+        song.url = data.url;
+        row.dataset.path = data.path;
+
+        const titleElement = row.querySelector(".song-title");
+        const audio = row.querySelector("audio");
+        titleElement.textContent = data.title;
+        audio.src = data.url;
+        setStatus(`Renamed to ${data.title}.`);
+    } catch (error) {
+        setStatus(error.message || "Could not rename song.");
+    }
+}
+
+async function deleteSong(row, song) {
+    if (!window.confirm(`Delete "${song.title}"? This permanently removes the MP3 from the library.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch("{{ url_for('delete_library_song') }}", {
+            method: "POST",
+            ...apiOptions(),
+            body: JSON.stringify({
+                drive_index: song.drive_index,
+                path: song.path,
+            }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Could not delete song.");
+        }
+
+        row.remove();
+        const remaining = songList.querySelectorAll(".song").length;
+        playlistTitle.textContent = `${playlistSelect.value} (${remaining} song${remaining === 1 ? "" : "s"})`;
+
+        if (!remaining) {
+            renderSongs([]);
+        }
+
+        setStatus(`Deleted ${song.title}.`);
+    } catch (error) {
+        setStatus(error.message || "Could not delete song.");
+    }
+}
+
+loadButton.addEventListener("click", loadPlaylist);
+playlistSelect.addEventListener("change", loadPlaylist);
 </script>
 </main>
 </body>

@@ -313,7 +313,13 @@ def download_with_youtube_fallback(options, url, destination, temp_prefix, start
 
 
 def extract_metadata_with_youtube_fallback(url, options):
-    """Extract metadata with cookies first and a public retry when appropriate."""
+    """Extract metadata with cookies first and a public retry when appropriate.
+
+    Do not globally set ``allowed_extractors`` here. Normal YouTube URLs must
+    reach yt-dlp's YouTube extractor, and canonical SoundCloud URLs must reach
+    the SoundCloud extractor. yt-dlp can use its generic extractor automatically
+    for short redirect URLs such as on.soundcloud.com.
+    """
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             return ydl.extract_info(url, download=False)
@@ -1009,16 +1015,6 @@ def download_single(
             "preferredcodec": "mp3",
             "preferredquality": quality,
         }],
-        # Only these extractors are useful to this application.
-        # SoundCloud share links such as on.soundcloud.com/... first use
-        # yt-dlp's generic extractor to follow the redirect to the canonical
-        # SoundCloud URL. YouTube remains explicitly allowlisted as well.
-        "allowed_extractors": [
-            "generic",
-            "youtube",
-            "youtube:tab",
-            "soundcloud",
-        ],
     }
 
     # Always download from the original URL supplied by the user/caller.
@@ -1186,7 +1182,6 @@ def download_playlist_entry(entry, playlist_name, quality, progress_callback=Non
         **yt_dlp_logging_options(),
         "socket_timeout": 20,
         "retries": 2,
-        "allowed_extractors": ["generic", "youtube", "soundcloud"],
     }
 
     try:
@@ -1516,12 +1511,6 @@ def download_music(url, playlist_name, quality, job_id=None, ip_address=None):
                 **yt_dlp_logging_options(),
                 "socket_timeout": 20,
                 "retries": 2,
-                "allowed_extractors": [
-                    "generic",
-                    "youtube",
-                    "youtube:tab",
-                    "soundcloud",
-                ],
             }
 
             info = extract_metadata_with_youtube_fallback(

@@ -15,6 +15,7 @@ button.danger{background:#a52b2b}
 a{color:#80aaff}
 nav{display:flex;gap:16px;flex-wrap:wrap}
 .message{padding:10px;border-radius:8px;margin:8px 0}.success{background:#183d28}.error{background:#4b2020}
+.progress-label{display:flex;justify-content:space-between;gap:12px;margin:8px 0;font-size:.95rem}.progress-track{height:18px;background:#0b0d11;border:1px solid #383d48;border-radius:999px;overflow:hidden}.progress-track.small{height:12px}.progress-fill{height:100%;width:0;background:#2b6df3;transition:width .2s ease}.progress-fill[aria-busy="true"]{opacity:.75}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
 </style>
 </head>
@@ -44,7 +45,7 @@ nav{display:flex;gap:16px;flex-wrap:wrap}
 
 <section class="card">
 <h2>Download</h2>
-<form method="post" action="{{ url_for('start_download') }}">
+<form id="downloadForm" method="post" action="{{ url_for('start_download') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
 <label for="url">YouTube or SoundCloud URL</label>
@@ -72,6 +73,20 @@ nav{display:flex;gap:16px;flex-wrap:wrap}
 </form>
 </section>
 
+<section id="downloadProgress" class="card" hidden aria-live="polite">
+<h2>Download progress</h2>
+<p id="progressPhase">Starting…</p>
+<div class="progress-label"><span>Playlist progress</span><strong id="progressCount">0 / 0</strong></div>
+<div class="progress-track" role="progressbar" aria-label="Playlist progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+  <div id="playlistProgressBar" class="progress-fill"></div>
+</div>
+<p id="progressCurrent">Waiting for download…</p>
+<div class="progress-track small" role="progressbar" aria-label="Current track progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+  <div id="trackProgressBar" class="progress-fill"></div>
+</div>
+<p id="progressMessage"></p>
+</section>
+
 <section class="card">
 <h2>Create playlist</h2>
 <input id="playlistName" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9 _()'&amp;.-]{0,63}">
@@ -94,6 +109,104 @@ nav{display:flex;gap:16px;flex-wrap:wrap}
 
 <script nonce="{{ csp_nonce }}">
 const csrfToken = {{ csrf_token|tojson }};
+
+const downloadForm = document.getElementById("downloadForm");
+const downloadButton = downloadForm.querySelector("button[type=submit]");
+const progressPanel = document.getElementById("downloadProgress");
+const progressPhase = document.getElementById("progressPhase");
+const progressCount = document.getElementById("progressCount");
+const progressCurrent = document.getElementById("progressCurrent");
+const progressMessage = document.getElementById("progressMessage");
+const playlistProgressBar = document.getElementById("playlistProgressBar");
+const trackProgressBar = document.getElementById("trackProgressBar");
+
+function setProgressBar(element, percent, label) {
+    const value = Math.max(0, Math.min(100, Number(percent) || 0));
+    element.style.width = value + "%";
+    const container = element.parentElement;
+    container.setAttribute("aria-valuenow", String(value));
+    container.setAttribute("aria-valuetext", label || `${value}%`);
+}
+
+function showProgress() {
+    progressPanel.hidden = false;
+    progressMessage.textContent = "";
+    progressPhase.textContent = "Starting…";
+    progressCurrent.textContent = "Waiting for download…";
+    progressCount.textContent = "0 / 0";
+    setProgressBar(playlistProgressBar, 0);
+    setProgressBar(trackProgressBar, 0);
+}
+
+function updateProgress(job) {
+    const total = Number(job.total) || 0;
+    const completed = Number(job.completed) || 0;
+    const playlistPercent = total ? Math.round((completed / total) * 100) : 0;
+
+    progressPhase.textContent = job.phase || "Downloading…";
+    progressCount.textContent = `${Math.min(completed, total)} / ${total}`;
+    setProgressBar(playlistProgressBar, playlistPercent, `${playlistPercent}%`);
+
+    const current = job.current_title || "Preparing current track…";
+    const currentPercent = Number(job.current_percent) || 0;
+    progressCurrent.textContent = `${current} — ${currentPercent}%`;
+    setProgressBar(trackProgressBar, currentPercent, `${currentPercent}%`);
+
+    if (job.status === "completed" || job.status === "error") {
+        progressMessage.textContent = job.message || (job.status === "completed" ? "Download complete." : "Download failed.");
+        downloadButton.disabled = false;
+        downloadButton.textContent = "Download";
+    }
+}
+
+async function pollDownload(jobId) {
+    for (;;) {
+        const response = await fetch(`{{ url_for('download_status', job_id='JOB_ID') }}`.replace("JOB_ID", encodeURIComponent(jobId)), {
+            headers: {"Accept": "application/json"},
+            cache: "no-store"
+        });
+
+        if (!response.ok) {
+            throw new Error("Could not read download status.");
+        }
+
+        const job = await response.json();
+        updateProgress(job);
+
+        if (job.status === "completed" || job.status === "error") {
+            return;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+}
+
+downloadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    downloadButton.disabled = true;
+    downloadButton.textContent = "Downloading…";
+    showProgress();
+
+    try {
+        const response = await fetch(downloadForm.action, {
+            method: "POST",
+            headers: {"X-CSRFToken": csrfToken},
+            body: new FormData(downloadForm)
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || "Could not start download.");
+        }
+
+        await pollDownload(data.job_id);
+    } catch (error) {
+        progressPhase.textContent = "Failed to start download";
+        progressMessage.textContent = error.message || "Download failed.";
+        downloadButton.disabled = false;
+        downloadButton.textContent = "Download";
+    }
+});
 
 document.getElementById("createPlaylist").addEventListener("click", async () => {
     const input = document.getElementById("playlistName");

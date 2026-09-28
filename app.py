@@ -47,8 +47,12 @@ MUSIC_LOCATIONS = [
     Path(path).expanduser().resolve()
     for path in os.environ.get("MUSIC_PATHS", "").split(":")
     if path.strip()
-
 ]
+
+if not MUSIC_LOCATIONS:
+    raise RuntimeError(
+        "Set MUSIC_PATHS to one or more colon-separated music directories."
+    )
 
 SINGLES_FOLDER = "Singles"
 
@@ -111,13 +115,28 @@ def resolve_config_path(value):
     return path.resolve()
 
 
-YOUTUBE_COOKIE_FILE = resolve_config_path(
-    os.environ.get("MUSIC_YOUTUBE_COOKIE_FILE", "cookies.txt")
-)
+YOUTUBE_BROWSER = os.environ.get("MUSIC_YOUTUBE_BROWSER", "firefox").strip().lower()
+YOUTUBE_BROWSER_PROFILE = os.environ.get("MUSIC_YOUTUBE_BROWSER_PROFILE", "").strip() or None
+YOUTUBE_BROWSER_CONTAINER = os.environ.get("MUSIC_YOUTUBE_BROWSER_CONTAINER", "").strip() or None
 
-if YOUTUBE_COOKIE_FILE and not YOUTUBE_COOKIE_FILE.is_file():
-    # Missing optional cookies should not prevent normal public downloads.
-    YOUTUBE_COOKIE_FILE = None
+if YOUTUBE_BROWSER not in {"firefox", "chrome", "chromium", "brave", "edge", "opera", "vivaldi", "whale", "safari"}:
+    raise RuntimeError("Unsupported MUSIC_YOUTUBE_BROWSER value.")
+
+
+def browser_cookie_options():
+    """Return yt-dlp options that read the live browser cookie database."""
+    # yt-dlp accepts (browser, profile, keyring, container) in its Python API.
+    # Leaving profile unset makes Firefox use the most recently accessed profile,
+    # matching: --cookies-from-browser firefox
+    return {
+        "cookiesfrombrowser": (
+            YOUTUBE_BROWSER,
+            YOUTUBE_BROWSER_PROFILE,
+            None,
+            YOUTUBE_BROWSER_CONTAINER,
+        ),
+    }
+
 
 
 def store_download_notice(message, category):
@@ -167,12 +186,12 @@ def yt_dlp_common_options(use_cookies=True, youtube_client_mode="authenticated")
         "remote_components": ["ejs:github"],
     }
 
-    deno_path = Path.home() / ".deno" / "bin" / "deno"
+    deno_path = Path(os.environ.get("MUSIC_DENO_PATH", str(Path.home() / ".deno" / "bin" / "deno"))).expanduser()
     if deno_path.is_file():
         options["js_runtimes"] = {"deno": {"path": str(deno_path)}}
 
-    if use_cookies and YOUTUBE_COOKIE_FILE:
-        options["cookiefile"] = str(YOUTUBE_COOKIE_FILE)
+    if use_cookies:
+        options.update(browser_cookie_options())
 
     if youtube_client_mode == "authenticated":
         # This client combination is useful for authenticated/age-restricted
@@ -253,7 +272,7 @@ def download_with_youtube_fallback(options, url, destination, temp_prefix, start
             ydl.download([url])
         return
     except yt_dlp.utils.DownloadError as error:
-        if not (YOUTUBE_COOKIE_FILE and is_youtube_url(url) and
+        if not (is_youtube_url(url) and
                 should_retry_youtube_without_cookies(error)):
             raise
 
@@ -264,7 +283,7 @@ def download_with_youtube_fallback(options, url, destination, temp_prefix, start
         cleanup_temp_downloads(destination, temp_prefix)
 
         public_options = dict(options)
-        public_options.pop("cookiefile", None)
+        public_options.pop("cookiesfrombrowser", None)
         # Remove the authenticated client selection and let yt-dlp use its
         # normal public clients for the fallback.
         public_options.pop("extractor_args", None)
@@ -279,7 +298,7 @@ def extract_metadata_with_youtube_fallback(url, options):
         with yt_dlp.YoutubeDL(options) as ydl:
             return ydl.extract_info(url, download=False)
     except yt_dlp.utils.DownloadError as error:
-        if not (YOUTUBE_COOKIE_FILE and is_youtube_url(url) and
+        if not (is_youtube_url(url) and
                 should_retry_youtube_without_cookies(error)):
             raise
 
@@ -288,7 +307,7 @@ def extract_metadata_with_youtube_fallback(url, options):
             url,
         )
         public_options = dict(options)
-        public_options.pop("cookiefile", None)
+        public_options.pop("cookiesfrombrowser", None)
         public_options.pop("extractor_args", None)
 
         with yt_dlp.YoutubeDL(public_options) as ydl:
@@ -311,6 +330,71 @@ download_lock = threading.Lock()
 # this with a shared limiter such as Redis.
 rate_lock = threading.Lock()
 rate_buckets = defaultdict(deque)
+
+# Background download jobs. The app intentionally runs with one Gunicorn
+# worker, so this in-process state is shared by the request and polling calls.
+download_jobs = {}
+download_jobs_lock = threading.Lock()
+DOWNLOAD_JOB_TTL_SECONDS = 60 * 60
+
+
+def create_download_job():
+    job_id = secrets.token_urlsafe(24)
+    with download_jobs_lock:
+        download_jobs[job_id] = {
+            "status": "queued",
+            "phase": "Queued",
+            "total": 0,
+            "completed": 0,
+            "current_index": 0,
+            "current_title": "",
+            "current_percent": 0,
+            "current_downloaded": 0,
+            "current_total": 0,
+            "message": "",
+            "created": time.monotonic(),
+            "updated": time.monotonic(),
+            "tracks": {},
+        }
+    return job_id
+
+
+def update_download_job(job_id, **changes):
+    now = time.monotonic()
+    with download_jobs_lock:
+        job = download_jobs.get(job_id)
+        if not job:
+            return
+        job.update(changes)
+        job["updated"] = now
+
+
+def update_download_track(job_id, index, **changes):
+    now = time.monotonic()
+    with download_jobs_lock:
+        job = download_jobs.get(job_id)
+        if not job:
+            return
+        track = dict(job["tracks"].get(str(index), {}))
+        track.update(changes)
+        job["tracks"][str(index)] = track
+        job["updated"] = now
+
+
+def get_download_job(job_id):
+    now = time.monotonic()
+    with download_jobs_lock:
+        # Expire old completed jobs to avoid unbounded memory growth.
+        for key, job in list(download_jobs.items()):
+            if now - job["updated"] > DOWNLOAD_JOB_TTL_SECONDS:
+                download_jobs.pop(key, None)
+
+        job = download_jobs.get(job_id)
+        if not job:
+            return None
+
+        # Do not expose internal timing data or the per-track worker state.
+        return {k: v for k, v in job.items() if k not in {"created", "updated", "tracks"}}
 
 
 # ---------------------------------------------------------------------------
@@ -802,32 +886,28 @@ class DownloadTimeout(Exception):
     pass
 
 
-def make_progress_hook(deadline):
+def make_progress_hook(deadline, progress_callback=None):
     def hook(data):
         if time.monotonic() > deadline:
             raise DownloadTimeout()
 
-        if data.get("status") == "downloading":
-            downloaded = data.get("downloaded_bytes") or 0
-            if downloaded > MAX_AUDIO_FILE_BYTES:
-                raise ValueError("download exceeded size limit")
+        status = data.get("status")
+        downloaded = data.get("downloaded_bytes") or 0
+        total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+
+        if downloaded > MAX_AUDIO_FILE_BYTES:
+            raise ValueError("download exceeded size limit")
+
+        if progress_callback:
+            percent = None
+            if total:
+                percent = max(0, min(100, int(downloaded * 100 / total)))
+            progress_callback(status, downloaded, total, percent)
 
     return hook
 
 
-def progress_hook(data):
-    status = data.get("status")
-
-    if status == "downloading":
-        # yt-dlp controls the network operation. We do not trust its filename
-        # or path as an application path; output templates below are controlled.
-        return
-
-    if status == "finished":
-        return
-
-
-def download_single(info, playlist_name, quality):
+def download_single(info, playlist_name, quality, progress_callback=None):
     title = clean_filename(info.get("title") or "Unknown")
 
     # Never start an audio download for a track that is 30 minutes or longer.
@@ -878,7 +958,7 @@ def download_single(info, playlist_name, quality):
         "continuedl": False,
         "overwrites": False,
         "restrictfilenames": True,
-        "progress_hooks": [make_progress_hook(start + MAX_DOWNLOAD_SECONDS)],
+        "progress_hooks": [make_progress_hook(start + MAX_DOWNLOAD_SECONDS, progress_callback)],
         "max_filesize": MAX_AUDIO_FILE_BYTES,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
@@ -1022,7 +1102,7 @@ def classify_ytdlp_error(error, title):
     return f"Skipped: {title} (download failed)"
 
 
-def download_playlist_entry(entry, playlist_name, quality):
+def download_playlist_entry(entry, playlist_name, quality, progress_callback=None):
     """Extract one playlist entry's metadata and download it independently."""
     entry_id = entry.get("id")
     title = clean_filename(entry.get("title") or "Unknown")
@@ -1075,6 +1155,7 @@ def download_playlist_entry(entry, playlist_name, quality):
             {"webpage_url": webpage_url, "title": metadata_title, "duration": duration},
             playlist_name,
             quality,
+            progress_callback=progress_callback,
         )
 
     except yt_dlp.utils.DownloadError as error:
@@ -1305,7 +1386,7 @@ def extract_youtube_playlist_with_fallback(url, max_items):
                 playlist_ydl, url, max_items
             )
     except yt_dlp.utils.DownloadError as error:
-        if not (YOUTUBE_COOKIE_FILE and is_youtube_url(url) and
+        if not (is_youtube_url(url) and
                 should_retry_youtube_without_cookies(error)):
             raise
 
@@ -1325,7 +1406,7 @@ def extract_youtube_playlist_with_fallback(url, max_items):
             )
 
 
-def download_music(url, playlist_name, quality):
+def download_music(url, playlist_name, quality, job_id=None):
     validated_url = validate_download_url(url)
     quality = validate_quality(quality)
 
@@ -1354,6 +1435,12 @@ def download_music(url, playlist_name, quality):
 
     try:
         max_items = MAX_PLAYLIST_ITEMS if is_playlist else 1
+
+        if job_id:
+            update_download_job(
+                job_id, status="running",
+                phase="Extracting playlist" if is_playlist else "Extracting track",
+            )
 
         extraction_warning = None
 
@@ -1404,9 +1491,39 @@ def download_music(url, playlist_name, quality):
         if is_playlist and len(entries) > MAX_PLAYLIST_ITEMS:
             return False, "Playlist is too large."
 
+        if job_id:
+            update_download_job(
+                job_id,
+                status="running",
+                phase="Downloading playlist" if is_playlist else "Downloading track",
+                total=len(entries),
+                completed=0,
+                current_percent=0,
+                current_downloaded=0,
+                current_total=0,
+            )
+
         # Single-video behavior remains sequential and otherwise unchanged.
         if not is_playlist:
-            ok, message = download_single(info, playlist_name, quality)
+            def single_progress(status, downloaded, total, percent):
+                if job_id:
+                    update_download_job(
+                        job_id,
+                        phase="Downloading track",
+                        current_percent=percent if percent is not None else 0,
+                        current_downloaded=downloaded,
+                        current_total=total,
+                        current_title=clean_filename(info.get("title") or "Unknown"),
+                    )
+
+            ok, message = download_single(
+                info, playlist_name, quality, progress_callback=single_progress
+            )
+            if job_id:
+                update_download_job(
+                    job_id, completed=1, total=1, current_percent=100 if ok else 0,
+                    phase="Complete" if ok else "Finished with errors",
+                )
             return ok, message
 
         # Playlist entries are independent. Process them concurrently while
@@ -1414,9 +1531,36 @@ def download_music(url, playlist_name, quality):
         messages = [None] * len(entries)
         success_count = 0
 
+        def make_track_progress(index, title):
+            def callback(status, downloaded, total, percent):
+                if not job_id:
+                    return
+                track_status = "downloading" if status == "downloading" else status
+                update_download_track(
+                    job_id, index, title=title, status=track_status,
+                    percent=percent if percent is not None else 0,
+                    downloaded=downloaded, total=total,
+                )
+                update_download_job(
+                    job_id, current_index=index + 1, current_title=title,
+                    current_percent=percent if percent is not None else 0,
+                    current_downloaded=downloaded, current_total=total,
+                )
+            return callback
+
+        for index, entry in enumerate(entries):
+            if job_id:
+                update_download_track(
+                    job_id, index, title=clean_filename(entry.get("title") or "Unknown"),
+                    status="queued", percent=0, downloaded=0, total=0,
+                )
+
         with ThreadPoolExecutor(max_workers=MAX_PARALLEL_DOWNLOADS) as executor:
             futures = {
-                executor.submit(download_playlist_entry, entry, playlist_name, quality): index
+                executor.submit(
+                    download_playlist_entry, entry, playlist_name, quality,
+                    make_track_progress(index, clean_filename(entry.get("title") or "Unknown")),
+                ): index
                 for index, entry in enumerate(entries)
             }
 
@@ -1429,8 +1573,18 @@ def download_music(url, playlist_name, quality):
                     ok, message = False, "Skipped: playlist entry (download failed)"
 
                 messages[index] = message
+                update_download_track(
+                    job_id, index, status="completed" if ok else "failed",
+                    percent=100 if ok else 0,
+                ) if job_id else None
                 if ok:
                     success_count += 1
+
+                if job_id:
+                    update_download_job(
+                        job_id, completed=sum(1 for m in messages if m is not None),
+                        current_percent=100 if ok else 0,
+                    )
 
         messages = [message for message in messages if message]
 
@@ -1440,15 +1594,34 @@ def download_music(url, playlist_name, quality):
         result_messages.extend(messages)
 
         if success_count:
-            return True, f"Playlist '{playlist_name}': " + " | ".join(result_messages)
+            message = f"Playlist '{playlist_name}': " + " | ".join(result_messages)
+            if job_id:
+                update_download_job(
+                    job_id, status="completed", phase="Complete",
+                    completed=len(entries), total=len(entries), message=message,
+                    current_percent=100,
+                )
+            return True, message
 
-        return False, " | ".join(result_messages) or "Nothing was downloaded."
+        message = " | ".join(result_messages) or "Nothing was downloaded."
+        if job_id:
+            update_download_job(
+                job_id, status="completed", phase="Finished with errors",
+                completed=len(entries), total=len(entries), message=message,
+            )
+        return False, message
 
     except yt_dlp.utils.DownloadError as error:
-        return False, classify_ytdlp_error(error, "Playlist")
+        message = classify_ytdlp_error(error, "Playlist")
+        if job_id:
+            update_download_job(job_id, status="completed", phase="Finished with errors", message=message)
+        return False, message
     except Exception:
         app.logger.exception("Download operation failed")
-        return False, "Download failed."
+        message = "Download failed."
+        if job_id:
+            update_download_job(job_id, status="error", phase="Failed", message=message)
+        return False, message
     finally:
         download_lock.release()
 
@@ -1526,29 +1699,42 @@ def logout():
 @login_required
 def start_download():
     if not rate_limit("download-request", 10, 60):
-        flash("Too many download requests.", "error")
-        return redirect(url_for("index"))
+        return jsonify(error="Too many download requests."), 429
 
     url = request.form.get("url", "")
     quality = request.form.get("quality", "")
     playlist = request.form.get("playlist", "")
 
-    # Don't echo arbitrary user input into HTML.
     if len(url) > MAX_URL_LENGTH:
-        flash("URL is too long.", "error")
-        return redirect(url_for("index"))
+        return jsonify(error="URL is too long."), 400
 
-    ok, message = download_music(url, playlist, quality)
+    job_id = create_download_job()
 
-    # Playlist results can be tens of kilobytes. Flask's default session is
-    # stored in the browser cookie, so never put the full result there.
-    # Store it server-side and keep only a short opaque ID in the session.
-    session.pop("_flashes", None)
-    session["download_notice_id"] = store_download_notice(
-        message, "success" if ok else "error"
-    )
+    def worker():
+        ok, message = download_music(url, playlist, quality, job_id=job_id)
+        update_download_job(
+            job_id,
+            status="completed" if ok else "error",
+            phase="Complete" if ok else "Failed",
+            message=message,
+        )
 
-    return redirect(url_for("index"))
+    threading.Thread(target=worker, name=f"download-{job_id[:8]}", daemon=True).start()
+
+    return jsonify(job_id=job_id), 202
+
+
+@app.get("/api/download-status/<job_id>")
+@login_required
+def download_status(job_id):
+    if not isinstance(job_id, str) or len(job_id) > 128:
+        return jsonify(error="Invalid job."), 400
+
+    job = get_download_job(job_id)
+    if not job:
+        return jsonify(error="Download job not found."), 404
+
+    return jsonify(job)
 
 
 @app.get("/player")

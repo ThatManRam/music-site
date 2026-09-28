@@ -108,60 +108,65 @@ Do not enable this while accessing the server over HTTP, or the login cookie wil
 
 - Tracks must be shorter than 30 minutes. Tracks that are 30:00 or longer are skipped before the audio download begins.
 
-## 9. Optional YouTube authentication cookies
+## 9. Live browser authentication and playlist progress
 
-To allow yt-dlp to access videos that your own YouTube account is permitted to
-watch, export the account cookies in Netscape/Mozilla cookie format and save
-them as `cookies.txt` beside `.env`. Do not share or commit this file.
+The application reads YouTube authentication cookies directly from the browser at
+download time. The recommended setup is Firefox running as the same `kiosk` user
+that runs the music service:
 
-Set:
+    MUSIC_YOUTUBE_BROWSER="firefox"
+    MUSIC_YOUTUBE_BROWSER_PROFILE=""
+    MUSIC_YOUTUBE_BROWSER_CONTAINER=""
 
-    MUSIC_YOUTUBE_COOKIE_FILE="cookies.txt"
-    MUSIC_MAX_PARALLEL_DOWNLOADS="3"
-    MUSIC_MAX_PLAYLIST_ITEMS="5000"
+Leaving the Firefox profile blank matches `--cookies-from-browser firefox`, so
+yt-dlp uses the most recently accessed Firefox profile. No `cookies.txt` file is
+created or stored by the application. yt-dlp documents `cookiesfrombrowser` as
+the Python API equivalent of `--cookies-from-browser`, and its Firefox reader
+works by copying the live cookies database before reading it.
 
-Large YouTube playlists receive additional extraction handling. The app compares
-yt-dlp's returned entry count with YouTube's reported `playlist_count`. If the
-playlist is incomplete, it retries using `youtubetab:skip=webpage` and then makes
-bounded playlist-index range requests to recover entries that were not exposed by
-the initial extraction. Recovery is capped by `MUSIC_MAX_PLAYLIST_RECOVERY_REQUESTS`
-and `MUSIC_PLAYLIST_RECOVERY_BATCH_SIZE` so a broken YouTube pagination response
-does not cause unbounded requests. If entries are still missing, the final result
-explicitly reports how many YouTube said existed versus how many yt-dlp exposed.
+Because browser cookies belong to the browser account, run the service as the
+`kiosk` user if Firefox also runs as `kiosk`. The application should never run as
+root. If Firefox is open, yt-dlp can read a temporary copy of the browser cookie
+database rather than requiring the Firefox database to be unlocked.
 
-The application uses the cookie file for playlist extraction, per-video
-metadata extraction, and the actual MP3 download. It also enables yt-dlp's
-EJS components from GitHub and automatically uses Deno from ~/.deno/bin/deno
-when present. This matches the tested command-line configuration:
-`--cookies cookies.txt --remote-components ejs:github`.
+Deno remains enabled for YouTube JavaScript challenge solving. The executable can
+be configured with:
 
-Some YouTube formats may still be unavailable because they require a GVS PO
-Token. That warning does not necessarily prevent a download; yt-dlp can select
-another usable format. The application does not hard-code or store PO Tokens.
-If an authenticated video still cannot be accessed, that entry is skipped and
-playlist processing continues.
+    MUSIC_DENO_PATH="/home/pi/.deno/bin/deno"
 
-The cookie file should be readable only by the service account, for example:
+The app keeps the authenticated-first YouTube strategy. If an authenticated
+request fails with a session/client-sensitive availability error, it retries
+without browser cookies using yt-dlp's normal public client selection. Private,
+members-only, removed, and authentication-required failures are not incorrectly
+converted into anonymous retries.
 
-    chmod 600 cookies.txt
+The web downloader now runs as a background job. The browser polls a protected
+status endpoint and displays both overall playlist progress (`completed / total`)
+and the current track's yt-dlp byte progress. This keeps the page responsive
+while the existing bounded parallel playlist workers continue processing entries.
 
-Never paste the contents of `cookies.txt` into chat, Git, logs, or the web UI.
+## 10. Music locations
 
-Download results are stored server-side under `state/notices/`; the Flask session cookie only stores a short notice ID, preventing large playlist results from overflowing browser cookie limits.
+Configure the music roots only through `MUSIC_PATHS`; do not hard-code drive
+paths in `app.py`:
 
-### YouTube authenticated/public fallback
+    MUSIC_PATHS="/mnt/CENMATE_250GB/music:/mnt/CENMATE_640GB/music"
 
-The downloader now uses a two-stage YouTube strategy when `cookies.txt` is
-configured:
+The application loads them as:
 
-1. Try authenticated extraction/download first, preserving access to videos the
-   configured account is allowed to watch.
-2. If that authenticated attempt reports a client/session-sensitive availability
-   failure such as `Video unavailable` or HTTP 403, retry once without cookies
-   using yt-dlp's normal public client selection.
-3. Private, removed, members-only, and authentication/age-verification failures
-   are not incorrectly converted into anonymous retries.
+    MUSIC_LOCATIONS = [
+        Path(path).expanduser().resolve()
+        for path in os.environ.get("MUSIC_PATHS", "").split(":")
+        if path.strip()
+    ]
 
-The same fallback is applied to single-track metadata extraction, playlist-entry
-metadata/download workers, and playlist extraction. Cookie contents are never
-logged or returned to the browser.
+The colon-separated form allows additional mounted music locations to be added
+without changing application code.
+
+Some YouTube formats may still be unavailable because they require a GVS PO Token.
+That warning does not necessarily prevent a download; yt-dlp can select another
+usable format. The application does not hard-code or store PO Tokens.
+
+Download results are stored server-side under `state/notices/`; the Flask session
+cookie only stores a short notice ID, preventing large playlist results from
+overflowing browser cookie limits.

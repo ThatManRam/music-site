@@ -82,6 +82,7 @@ ALLOWED_DOWNLOAD_HOSTS = {
     "youtu.be",
     "soundcloud.com",
     "www.soundcloud.com",
+    "on.soundcloud.com",
 }
 
 ALLOWED_QUALITIES = {"128", "192", "256", "320"}
@@ -174,6 +175,24 @@ def consume_download_notice():
     return category, message
 
 
+YTDLP_VERBOSE = os.environ.get("MUSIC_YTDLP_VERBOSE", "1") == "1"
+
+
+def yt_dlp_logging_options():
+    """Return consistent yt-dlp logging settings for server diagnostics."""
+    if YTDLP_VERBOSE:
+        return {
+            "verbose": True,
+            "quiet": False,
+            "no_warnings": False,
+        }
+
+    return {
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+
 def yt_dlp_common_options(use_cookies=True, youtube_client_mode="authenticated"):
     """Build yt-dlp options for either authenticated or public YouTube access.
 
@@ -184,6 +203,7 @@ def yt_dlp_common_options(use_cookies=True, youtube_client_mode="authenticated")
     """
     options = {
         "remote_components": ["ejs:github"],
+        **yt_dlp_logging_options(),
     }
 
     deno_path = Path(os.environ.get("MUSIC_DENO_PATH", str(Path.home() / ".deno" / "bin" / "deno"))).expanduser()
@@ -926,7 +946,13 @@ def make_progress_hook(deadline, progress_callback=None):
     return hook
 
 
-def download_single(info, playlist_name, quality, progress_callback=None):
+def download_single(
+    info,
+    playlist_name,
+    quality,
+    progress_callback=None,
+    download_url=None,
+):
     title = title_with_fallback(info)
 
     # Never start an audio download for a track that is 30 minutes or longer.
@@ -969,8 +995,7 @@ def download_single(info, playlist_name, quality, progress_callback=None):
         "format": "bestaudio/best",
         "outtmpl": output_template,
         "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
+        **yt_dlp_logging_options(),
         "socket_timeout": 20,
         "retries": 2,
         "fragment_retries": 2,
@@ -985,15 +1010,27 @@ def download_single(info, playlist_name, quality, progress_callback=None):
             "preferredquality": quality,
         }],
         # Only these extractors are useful to this application.
+        # SoundCloud share links such as on.soundcloud.com/... first use
+        # yt-dlp's generic extractor to follow the redirect to the canonical
+        # SoundCloud URL. YouTube remains explicitly allowlisted as well.
         "allowed_extractors": [
+            "generic",
             "youtube",
             "youtube:tab",
             "soundcloud",
         ],
     }
 
-    # Do not allow the extractor to process arbitrary URLs here.
-    url = validate_download_url(info["webpage_url"])
+    # Always download from the original URL supplied by the user/caller.
+    # Some extractors (notably SoundCloud) can put an internal/embed URL into
+    # info["webpage_url"]. Feeding that derived URL back into yt-dlp can cause
+    # errors such as "Unsupported URL: https://w.soundcloud.com/player/...".
+    # The original on.soundcloud.com URL is exactly what yt-dlp successfully
+    # resolves through its generic extractor.
+    if download_url is None:
+        download_url = info.get("webpage_url")
+
+    url = validate_download_url(download_url)
 
     if not url:
         return False, "Rejected download URL."
@@ -1146,11 +1183,10 @@ def download_playlist_entry(entry, playlist_name, quality, progress_callback=Non
     metadata_options = {
         **yt_dlp_common_options(),
         "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
+        **yt_dlp_logging_options(),
         "socket_timeout": 20,
         "retries": 2,
-        "allowed_extractors": ["youtube", "soundcloud"],
+        "allowed_extractors": ["generic", "youtube", "soundcloud"],
     }
 
     try:
@@ -1271,8 +1307,7 @@ def extract_youtube_playlist(ydl, url, max_items):
     base_options = {
         "extract_flat": True,
         "noplaylist": False,
-        "quiet": True,
-        "no_warnings": True,
+        **yt_dlp_logging_options(),
         "socket_timeout": 20,
         "retries": 2,
         "playlistend": max_items,
@@ -1395,8 +1430,7 @@ def extract_youtube_playlist_with_fallback(url, max_items):
     """
     authenticated_options = {
         **yt_dlp_common_options(),
-        "quiet": True,
-        "no_warnings": True,
+        **yt_dlp_logging_options(),
     }
 
     try:
@@ -1416,8 +1450,7 @@ def extract_youtube_playlist_with_fallback(url, max_items):
 
         public_options = {
             **yt_dlp_common_options(use_cookies=False, youtube_client_mode="public"),
-            "quiet": True,
-            "no_warnings": True,
+            **yt_dlp_logging_options(),
         }
         with yt_dlp.YoutubeDL(public_options) as playlist_ydl:
             return extract_youtube_playlist(
@@ -1480,11 +1513,15 @@ def download_music(url, playlist_name, quality, job_id=None, ip_address=None):
                 **yt_dlp_common_options(),
                 "extract_flat": True,
                 "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
+                **yt_dlp_logging_options(),
                 "socket_timeout": 20,
                 "retries": 2,
-                "allowed_extractors": ["youtube", "youtube:tab", "soundcloud"],
+                "allowed_extractors": [
+                    "generic",
+                    "youtube",
+                    "youtube:tab",
+                    "soundcloud",
+                ],
             }
 
             info = extract_metadata_with_youtube_fallback(
@@ -1538,7 +1575,11 @@ def download_music(url, playlist_name, quality, job_id=None, ip_address=None):
                     )
 
             ok, message = download_single(
-                info, playlist_name, quality, progress_callback=single_progress
+                info,
+                playlist_name,
+                quality,
+                progress_callback=single_progress,
+                download_url=validated_url,
             )
             if job_id:
                 update_download_job(

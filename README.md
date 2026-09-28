@@ -170,3 +170,22 @@ usable format. The application does not hard-code or store PO Tokens.
 Download results are stored server-side under `state/notices/`; the Flask session
 cookie only stores a short notice ID, preventing large playlist results from
 overflowing browser cookie limits.
+
+## SoundCloud / YouTube download fix
+
+This build keeps the original submitted URL for the actual download. This is important for SoundCloud share links such as `https://on.soundcloud.com/...`, because yt-dlp may expose an internal/embed URL in extracted metadata that is not itself a downloadable URL.
+
+The build also:
+
+- allows `on.soundcloud.com` through URL validation;
+- allows yt-dlp's `generic` extractor so SoundCloud short links can follow their redirect;
+- keeps YouTube and SoundCloud explicitly allowlisted;
+- keeps the existing authenticated YouTube cookie/Deno path and public YouTube fallback;
+- enables verbose yt-dlp diagnostics by default through `MUSIC_YTDLP_VERBOSE=1`;
+- allows verbose logging to be disabled with `MUSIC_YTDLP_VERBOSE=0`.
+
+For a systemd deployment, verbose yt-dlp output will appear in:
+
+```bash
+sudo journalctl -u music-site -f
+```

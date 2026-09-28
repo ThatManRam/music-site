@@ -10,6 +10,7 @@ from collections import defaultdict, deque
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from flask import (
     Flask, abort, flash, jsonify, redirect, render_template,
@@ -578,6 +579,55 @@ def validate_download_url(value):
         return None
 
     return value
+
+
+def resolve_soundcloud_short_url(value):
+    """Resolve an on.soundcloud.com share link to its canonical SoundCloud URL.
+
+    SoundCloud share links return an HTTP redirect to soundcloud.com. Resolving
+    that redirect before calling yt-dlp lets yt-dlp select its native
+    SoundCloud extractor instead of remaining in the generic extractor.
+    Only the known SoundCloud short-link host is resolved, and the final URL
+    must pass the normal download URL allowlist.
+    """
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+
+    if hostname != "on.soundcloud.com":
+        return value
+
+    try:
+        request = Request(
+            value,
+            method="HEAD",
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; MusicDownloader/1.0)",
+            },
+        )
+        with urlopen(request, timeout=10) as response:
+            resolved_url = response.geturl()
+    except Exception as error:
+        app.logger.warning(
+            "Could not resolve SoundCloud short URL %s: %s",
+            value,
+            error,
+        )
+        return None
+
+    resolved_url = validate_download_url(resolved_url)
+    if not resolved_url:
+        app.logger.warning(
+            "SoundCloud short URL %s resolved to a rejected URL",
+            value,
+        )
+        return value
+
+    app.logger.info(
+        "Resolved SoundCloud short URL %s -> %s",
+        value,
+        resolved_url,
+    )
+    return resolved_url
 
 
 def validate_drive_index(value):
@@ -1459,6 +1509,14 @@ def download_music(url, playlist_name, quality, job_id=None, ip_address=None):
 
     if not validated_url:
         return False, "Invalid or unsupported URL."
+
+    # Resolve SoundCloud's share-link redirect before metadata extraction.
+    # This makes yt-dlp receive the canonical soundcloud.com URL and use its
+    # native SoundCloud extractor instead of getting stuck at [generic].
+    resolved_url = resolve_soundcloud_short_url(validated_url)
+    if resolved_url is None:
+        return False, "Could not resolve the SoundCloud share link. Try the full soundcloud.com URL."
+    validated_url = resolved_url
 
     if not quality:
         return False, "Invalid MP3 quality."

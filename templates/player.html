@@ -82,341 +82,444 @@ audio{width:100%;margin:10px 0}
 </section>
 
 <script nonce="{{ csp_nonce }}">
-const csrfToken = {{ csrf_token|tojson }};
-const playlists = {{ playlists|tojson }};
+    // -------------------------------------------------------------------------
+    // Page state and DOM references
+    // -------------------------------------------------------------------------
 
-const select = document.getElementById("playlistSelect");
-const audio = document.getElementById("audio");
-const list = document.getElementById("songList");
-const songSearch = document.getElementById("songSearch");
-const songSearchStatus = document.getElementById("songSearchStatus");
-const nowPlaying = document.getElementById("nowPlaying");
-const loopToggle = document.getElementById("loopToggle");
-const autoplayToggle = document.getElementById("autoplayToggle");
-let currentIndex = 0;
-let currentSongs = [];
-let autoplayEnabled = true;
+    const csrfToken = {{ csrf_token|tojson }};
+    const playlists = {{ playlists|tojson }};
 
-for (const name of Object.keys(playlists)) {
-    const option = document.createElement("option");
-    option.value = name;
-    option.textContent = name;
-    select.appendChild(option);
-}
+    const select = document.getElementById("playlistSelect");
+    const audio = document.getElementById("audio");
+    const list = document.getElementById("songList");
+    const songSearch = document.getElementById("songSearch");
+    const songSearchStatus = document.getElementById("songSearchStatus");
+    const nowPlaying = document.getElementById("nowPlaying");
+    const loopToggle = document.getElementById("loopToggle");
+    const autoplayToggle = document.getElementById("autoplayToggle");
 
-function updateMediaSession(song) {
-    if (!("mediaSession" in navigator) || !("MediaMetadata" in window)) {
-        return;
+    let currentIndex = 0;
+    let currentSongs = [];
+    let autoplayEnabled = true;
+
+
+    // -------------------------------------------------------------------------
+    // Playlist setup
+    // -------------------------------------------------------------------------
+
+    for (const name of Object.keys(playlists)) {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
     }
 
-    navigator.mediaSession.metadata = new MediaMetadata({
-        title: song.title,
-        artist: "Local Music Library",
-        album: select.value
-    });
-}
 
-function renderSongs() {
-    const allSongs = playlists[select.value] || [];
-    const query = songSearch.value.trim().toLocaleLowerCase();
+    // -------------------------------------------------------------------------
+    // Media Session API
+    //
+    // These handlers are what allow supported mobile browsers to expose
+    // play/pause, previous/next, and seek controls on the lock screen or
+    // Control Center. The underlying audio URL and download logic are not
+    // changed here.
+    // -------------------------------------------------------------------------
 
-    currentSongs = allSongs.filter(song => {
-        if (!query) {
-            return true;
+    function updateMediaSession(song) {
+        if (!("mediaSession" in navigator) || !("MediaMetadata" in window)) {
+            return;
         }
-        return song.title.toLocaleLowerCase().includes(query);
-    });
 
-    list.replaceChildren();
-
-    if (query) {
-        songSearchStatus.textContent = `${currentSongs.length} of ${allSongs.length} song${allSongs.length === 1 ? "" : "s"} found.`;
-    } else {
-        songSearchStatus.textContent = "";
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: song.title,
+            artist: "Local Music Library",
+            album: select.value
+        });
     }
 
-    currentSongs.forEach((song, index) => {
-        const row = document.createElement("div");
-        row.className = "song";
 
-        const title = document.createElement("span");
-        title.className = "song-title";
-        title.textContent = song.title;
+    // -------------------------------------------------------------------------
+    // Song list rendering
+    // -------------------------------------------------------------------------
 
-        const isPlaying = currentSongs[index] === currentSongs[currentIndex] &&
-            audio.src && !audio.paused;
+    function renderSongs() {
+        const allSongs = playlists[select.value] || [];
+        const query = songSearch.value.trim().toLocaleLowerCase();
 
-        if (isPlaying) {
-            row.classList.add("playing");
-        }
-
-        const play = document.createElement("button");
-        play.type = "button";
-        play.className = "play-button";
-        play.textContent = isPlaying ? "Playing" : "Play";
-        play.setAttribute("aria-pressed", String(isPlaying));
-        play.addEventListener("click", () => playSong(index));
-
-        const moveSelect = document.createElement("select");
-
-        for (const destination of Object.keys(playlists)) {
-            if (destination !== select.value) {
-                const option = document.createElement("option");
-                option.value = destination;
-                option.textContent = "Move to " + destination;
-                moveSelect.appendChild(option);
+        currentSongs = allSongs.filter(song => {
+            if (!query) {
+                return true;
             }
+
+            return song.title.toLocaleLowerCase().includes(query);
+        });
+
+        list.replaceChildren();
+
+        if (query) {
+            songSearchStatus.textContent =
+                `${currentSongs.length} of ${allSongs.length} song` +
+                `${allSongs.length === 1 ? "" : "s"} found.`;
+        } else {
+            songSearchStatus.textContent = "";
         }
 
-        const move = document.createElement("button");
-        move.type = "button";
-        move.className = "move-button";
-        move.textContent = "Move";
-        move.addEventListener("click", () => moveSong(song, moveSelect.value));
+        currentSongs.forEach((song, index) => {
+            const row = document.createElement("div");
+            row.className = "song";
 
-        row.append(title, play, moveSelect, move);
-        list.appendChild(row);
+            const title = document.createElement("span");
+            title.className = "song-title";
+            title.textContent = song.title;
+
+            const isPlaying =
+                currentSongs[index] === currentSongs[currentIndex] &&
+                audio.src &&
+                !audio.paused;
+
+            if (isPlaying) {
+                row.classList.add("playing");
+            }
+
+            const play = document.createElement("button");
+            play.type = "button";
+            play.className = "play-button";
+            play.textContent = isPlaying ? "Playing" : "Play";
+            play.setAttribute("aria-pressed", String(isPlaying));
+            play.addEventListener("click", () => playSong(index));
+
+            const moveSelect = document.createElement("select");
+
+            for (const destination of Object.keys(playlists)) {
+                if (destination !== select.value) {
+                    const option = document.createElement("option");
+                    option.value = destination;
+                    option.textContent = "Move to " + destination;
+                    moveSelect.appendChild(option);
+                }
+            }
+
+            const move = document.createElement("button");
+            move.type = "button";
+            move.className = "move-button";
+            move.textContent = "Move";
+            move.addEventListener("click", () => {
+                moveSong(song, moveSelect.value);
+            });
+
+            row.append(title, play, moveSelect, move);
+            list.appendChild(row);
+        });
+    }
+
+
+    // -------------------------------------------------------------------------
+    // Playback
+    // -------------------------------------------------------------------------
+
+    function playSong(index) {
+        if (!currentSongs[index]) {
+            return;
+        }
+
+        currentIndex = index;
+        const song = currentSongs[index];
+
+        // Keep using the URL supplied by the server/library. This is important
+        // for the existing YouTube/SoundCloud download workflow.
+        audio.src = song.url;
+        audio.play().catch(() => {});
+
+        nowPlaying.textContent = "Now playing: " + song.title;
+        updateMediaSession(song);
+        renderSongs();
+    }
+
+    function nextSong() {
+        if (!currentSongs.length) {
+            return;
+        }
+
+        currentIndex = (currentIndex + 1) % currentSongs.length;
+        playSong(currentIndex);
+    }
+
+    function previousSong() {
+        if (!currentSongs.length) {
+            return;
+        }
+
+        currentIndex =
+            (currentIndex - 1 + currentSongs.length) % currentSongs.length;
+
+        playSong(currentIndex);
+    }
+
+
+    // -------------------------------------------------------------------------
+    // Move a song between playlists
+    // -------------------------------------------------------------------------
+
+    async function moveSong(song, destination) {
+        if (!destination) {
+            return;
+        }
+
+        const response = await fetch("{{ url_for('move_song') }}", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRFToken": csrfToken
+            },
+            body: JSON.stringify({
+                source_drive: song.drive_index,
+                source_path: song.path,
+                destination_playlist: destination
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            alert(data.error || "Could not move song.");
+            return;
+        }
+
+        const source = select.value;
+
+        playlists[source] = playlists[source].filter(
+            item =>
+                !(
+                    item.path === song.path &&
+                    item.drive_index === song.drive_index
+                )
+        );
+
+        playlists[destination] = playlists[destination] || [];
+        playlists[destination].push({
+            ...song,
+            path: destination + "/" + song.filename
+        });
+
+        if (currentSongs[currentIndex] === song) {
+            audio.pause();
+            audio.removeAttribute("src");
+            nowPlaying.textContent = "Nothing playing";
+        }
+
+        renderSongs();
+    }
+
+
+    // -------------------------------------------------------------------------
+    // Search and playlist selection
+    // -------------------------------------------------------------------------
+
+    songSearch.addEventListener("input", () => {
+        currentIndex = 0;
+        renderSongs();
     });
-}
 
-function playSong(index) {
-    if (!currentSongs[index]) {
-        return;
-    }
+    select.addEventListener("change", () => {
+        currentIndex = 0;
+        songSearch.value = "";
 
-    currentIndex = index;
-    const song = currentSongs[index];
-
-    audio.src = song.url;
-    audio.play().catch(() => {});
-    nowPlaying.textContent = "Now playing: " + song.title;
-    updateMediaSession(song);
-    renderSongs();
-}
-
-function nextSong() {
-    if (!currentSongs.length) {
-        return;
-    }
-
-    currentIndex = (currentIndex + 1) % currentSongs.length;
-    playSong(currentIndex);
-}
-
-function previousSong() {
-    if (!currentSongs.length) {
-        return;
-    }
-
-    currentIndex =
-        (currentIndex - 1 + currentSongs.length) % currentSongs.length;
-
-    playSong(currentIndex);
-}
-
-async function moveSong(song, destination) {
-    if (!destination) {
-        return;
-    }
-
-    const response = await fetch("{{ url_for('move_song') }}", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken
-        },
-        body: JSON.stringify({
-            source_drive: song.drive_index,
-            source_path: song.path,
-            destination_playlist: destination
-        })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-        alert(data.error || "Could not move song.");
-        return;
-    }
-
-    const source = select.value;
-    playlists[source] = playlists[source].filter(
-        item => !(item.path === song.path && item.drive_index === song.drive_index)
-    );
-
-    playlists[destination] = playlists[destination] || [];
-    playlists[destination].push({
-        ...song,
-        path: destination + "/" + song.filename
-    });
-
-    if (currentSongs[currentIndex] === song) {
         audio.pause();
         audio.removeAttribute("src");
         nowPlaying.textContent = "Nothing playing";
-    }
 
-    renderSongs();
-}
-
-songSearch.addEventListener("input", () => {
-    currentIndex = 0;
-    renderSongs();
-});
-
-select.addEventListener("change", () => {
-    currentIndex = 0;
-    songSearch.value = "";
-    audio.pause();
-    audio.removeAttribute("src");
-    nowPlaying.textContent = "Nothing playing";
-    renderSongs();
-});
-
-document.getElementById("playPause").addEventListener("click", () => {
-    if (audio.paused) {
-        if (!audio.src && currentSongs.length) {
-            playSong(currentIndex);
-        } else {
-            audio.play().catch(() => {});
-        }
-    } else {
-        audio.pause();
-    }
-});
-
-document.getElementById("next").addEventListener("click", nextSong);
-document.getElementById("previous").addEventListener("click", previousSong);
-
-audio.addEventListener("ended", () => {
-    if (autoplayEnabled && !audio.loop) {
-        nextSong();
-    }
-});
-
-loopToggle.addEventListener("click", () => {
-    audio.loop = !audio.loop;
-    loopToggle.setAttribute("aria-pressed", String(audio.loop));
-    loopToggle.textContent = audio.loop ? "Loop: On" : "Loop: Off";
-});
-
-autoplayToggle.addEventListener("click", () => {
-    autoplayEnabled = !autoplayEnabled;
-    autoplayToggle.setAttribute("aria-pressed", String(autoplayEnabled));
-    autoplayToggle.textContent = autoplayEnabled ? "Autoplay: On" : "Autoplay: Off";
-});
-
-document.getElementById("createButton").addEventListener("click", async () => {
-    const input = document.getElementById("newPlaylist");
-    const name = input.value.trim();
-
-    if (!name || name.length > 64) {
-        alert("Invalid playlist name.");
-        return;
-    }
-
-    const response = await fetch("{{ url_for('create_playlist_route') }}", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken
-        },
-        body: JSON.stringify({name})
+        renderSongs();
     });
 
-    const data = await response.json();
 
-    if (!response.ok) {
-        alert(data.error || "Could not create playlist.");
-        return;
-    }
+    // -------------------------------------------------------------------------
+    // Player controls
+    // -------------------------------------------------------------------------
 
-    window.location.reload();
-});
-
-document.getElementById("deleteButton").addEventListener("click", async () => {
-    const name = select.value;
-
-    if (!name || name === "Singles") {
-        alert("Singles cannot be deleted.");
-        return;
-    }
-
-    if (!confirm("Permanently delete this playlist and its files?")) {
-        return;
-    }
-
-    const response = await fetch("{{ url_for('delete_playlist_route') }}", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken
-        },
-        body: JSON.stringify({name})
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-        alert(data.error || "Could not delete playlist.");
-        return;
-    }
-
-    window.location.reload();
-});
-
-if ("mediaSession" in navigator) {
-    navigator.mediaSession.setActionHandler("play", () => {
-        audio.play().catch(() => {});
-    });
-
-    navigator.mediaSession.setActionHandler("pause", () => {
-        audio.pause();
-    });
-
-    navigator.mediaSession.setActionHandler("nexttrack", nextSong);
-    navigator.mediaSession.setActionHandler("previoustrack", previousSong);
-
-    navigator.mediaSession.setActionHandler("seekbackward", details => {
-        audio.currentTime = Math.max(
-            0,
-            audio.currentTime - (details.seekOffset || 10)
-        );
-    });
-
-    navigator.mediaSession.setActionHandler("seekforward", details => {
-        audio.currentTime = Math.min(
-            audio.duration || Infinity,
-            audio.currentTime + (details.seekOffset || 10)
-        );
-    });
-
-    try {
-        navigator.mediaSession.setActionHandler("seekto", details => {
-            if (details.fastSeek && "fastSeek" in audio) {
-                audio.fastSeek(details.seekTime);
+    document.getElementById("playPause").addEventListener("click", () => {
+        if (audio.paused) {
+            if (!audio.src && currentSongs.length) {
+                playSong(currentIndex);
             } else {
-                audio.currentTime = details.seekTime;
+                audio.play().catch(() => {});
             }
+        } else {
+            audio.pause();
+        }
+    });
+
+    document.getElementById("next").addEventListener("click", nextSong);
+    document.getElementById("previous").addEventListener("click", previousSong);
+
+    audio.addEventListener("ended", () => {
+        if (autoplayEnabled && !audio.loop) {
+            nextSong();
+        }
+    });
+
+    loopToggle.addEventListener("click", () => {
+        audio.loop = !audio.loop;
+
+        loopToggle.setAttribute("aria-pressed", String(audio.loop));
+        loopToggle.textContent = audio.loop ? "Loop: On" : "Loop: Off";
+    });
+
+    autoplayToggle.addEventListener("click", () => {
+        autoplayEnabled = !autoplayEnabled;
+
+        autoplayToggle.setAttribute(
+            "aria-pressed",
+            String(autoplayEnabled)
+        );
+
+        autoplayToggle.textContent =
+            autoplayEnabled ? "Autoplay: On" : "Autoplay: Off";
+    });
+
+
+    // -------------------------------------------------------------------------
+    // Create playlist
+    // -------------------------------------------------------------------------
+
+    document.getElementById("createButton").addEventListener(
+        "click",
+        async () => {
+            const input = document.getElementById("newPlaylist");
+            const name = input.value.trim();
+
+            if (!name || name.length > 64) {
+                alert("Invalid playlist name.");
+                return;
+            }
+
+            const response = await fetch(
+                "{{ url_for('create_playlist_route') }}",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": csrfToken
+                    },
+                    body: JSON.stringify({ name })
+                }
+            );
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                alert(data.error || "Could not create playlist.");
+                return;
+            }
+
+            window.location.reload();
+        }
+    );
+
+
+    // -------------------------------------------------------------------------
+    // Delete playlist
+    // -------------------------------------------------------------------------
+
+    document.getElementById("deleteButton").addEventListener(
+        "click",
+        async () => {
+            const name = select.value;
+
+            if (!name || name === "Singles") {
+                alert("Singles cannot be deleted.");
+                return;
+            }
+
+            if (!confirm("Permanently delete this playlist and its files?")) {
+                return;
+            }
+
+            const response = await fetch(
+                "{{ url_for('delete_playlist_route') }}",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": csrfToken
+                    },
+                    body: JSON.stringify({ name })
+                }
+            );
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                alert(data.error || "Could not delete playlist.");
+                return;
+            }
+
+            window.location.reload();
+        }
+    );
+
+
+    // -------------------------------------------------------------------------
+    // Media Session controls
+    // -------------------------------------------------------------------------
+
+    if ("mediaSession" in navigator) {
+        navigator.mediaSession.setActionHandler("play", () => {
+            audio.play().catch(() => {});
         });
-    } catch (_) {}
-}
 
-audio.addEventListener("play", () => {
-    if ("mediaSession" in navigator) {
-        navigator.mediaSession.playbackState = "playing";
+        navigator.mediaSession.setActionHandler("pause", () => {
+            audio.pause();
+        });
+
+        navigator.mediaSession.setActionHandler("nexttrack", nextSong);
+        navigator.mediaSession.setActionHandler("previoustrack", previousSong);
+
+        navigator.mediaSession.setActionHandler("seekbackward", details => {
+            audio.currentTime = Math.max(
+                0,
+                audio.currentTime - (details.seekOffset || 10)
+            );
+        });
+
+        navigator.mediaSession.setActionHandler("seekforward", details => {
+            audio.currentTime = Math.min(
+                audio.duration || Infinity,
+                audio.currentTime + (details.seekOffset || 10)
+            );
+        });
+
+        try {
+            navigator.mediaSession.setActionHandler("seekto", details => {
+                if (details.fastSeek && "fastSeek" in audio) {
+                    audio.fastSeek(details.seekTime);
+                } else {
+                    audio.currentTime = details.seekTime;
+                }
+            });
+        } catch (_) {}
     }
-    renderSongs();
-});
 
-audio.addEventListener("pause", () => {
-    if ("mediaSession" in navigator) {
-        navigator.mediaSession.playbackState = "paused";
-    }
-    renderSongs();
-});
+    audio.addEventListener("play", () => {
+        if ("mediaSession" in navigator) {
+            navigator.mediaSession.playbackState = "playing";
+        }
 
-renderSongs();
+        renderSongs();
+    });
+
+    audio.addEventListener("pause", () => {
+        if ("mediaSession" in navigator) {
+            navigator.mediaSession.playbackState = "paused";
+        }
+
+        renderSongs();
+    });
+
+
+    // -------------------------------------------------------------------------
+    // Initial render
+    // -------------------------------------------------------------------------
+
+    renderSongs();
 </script>
 </main>
 </body>

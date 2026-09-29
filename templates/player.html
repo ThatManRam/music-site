@@ -97,6 +97,13 @@ let currentIndex = 0;
 let currentSongs = [];
 let autoplayEnabled = true;
 
+// iOS/Safari can pause a web audio element when another app or video takes
+// control of the device audio session. Keep track of whether the pause was
+// intentional so we can distinguish a user pause from an interruption.
+let intentionalPause = false;
+let interruptedPlayback = false;
+let resumeAttemptTimer = null;
+
 for (const name of Object.keys(playlists)) {
     const option = document.createElement("option");
     option.value = name;
@@ -251,6 +258,8 @@ async function moveSong(song, destination) {
     });
 
     if (currentSongs[currentIndex] === song) {
+        intentionalPause = true;
+        interruptedPlayback = false;
         audio.pause();
         audio.removeAttribute("src");
         nowPlaying.textContent = "Nothing playing";
@@ -267,6 +276,8 @@ songSearch.addEventListener("input", () => {
 select.addEventListener("change", () => {
     currentIndex = 0;
     songSearch.value = "";
+    intentionalPause = true;
+    interruptedPlayback = false;
     audio.pause();
     audio.removeAttribute("src");
     nowPlaying.textContent = "Nothing playing";
@@ -275,12 +286,17 @@ select.addEventListener("change", () => {
 
 document.getElementById("playPause").addEventListener("click", () => {
     if (audio.paused) {
+        interruptedPlayback = false;
+        intentionalPause = false;
+
         if (!audio.src && currentSongs.length) {
             playSong(currentIndex);
         } else {
             audio.play().catch(() => {});
         }
     } else {
+        intentionalPause = true;
+        interruptedPlayback = false;
         audio.pause();
     }
 });
@@ -388,6 +404,9 @@ if ("mediaSession" in navigator) {
 
     try {
         navigator.mediaSession.setActionHandler("pause", () => {
+            // A pause command from the iPhone Lock Screen is intentional.
+            intentionalPause = true;
+            interruptedPlayback = false;
             audio.pause();
         });
     } catch (_) {}
@@ -406,6 +425,10 @@ if ("mediaSession" in navigator) {
 }
 
 audio.addEventListener("play", () => {
+    // A successful play means the interruption has been recovered.
+    intentionalPause = false;
+    interruptedPlayback = false;
+
     if ("mediaSession" in navigator) {
         navigator.mediaSession.playbackState = "playing";
     }
@@ -416,7 +439,69 @@ audio.addEventListener("pause", () => {
     if ("mediaSession" in navigator) {
         navigator.mediaSession.playbackState = "paused";
     }
+
+    // Do not treat an intentional user pause as an interruption. If Safari
+    // pauses the audio because another app/video takes over, this event is
+    // not preceded by our intentional-pause flag, so remember the playback
+    // position and try to resume when Safari becomes active again.
+    if (
+        !intentionalPause &&
+        audio.src &&
+        Number.isFinite(audio.currentTime) &&
+        audio.currentTime > 0 &&
+        (!Number.isFinite(audio.duration) || audio.currentTime < audio.duration - 0.25)
+    ) {
+        interruptedPlayback = true;
+    }
+
+    intentionalPause = false;
     renderSongs();
+});
+
+function attemptInterruptedPlaybackResume() {
+    if (!interruptedPlayback || !audio.src || !audio.paused) {
+        return;
+    }
+
+    if (document.visibilityState !== "visible") {
+        return;
+    }
+
+    if (resumeAttemptTimer !== null) {
+        window.clearTimeout(resumeAttemptTimer);
+    }
+
+    // Give Safari a moment to release the audio session from the other video.
+    resumeAttemptTimer = window.setTimeout(() => {
+        resumeAttemptTimer = null;
+
+        if (!interruptedPlayback || !audio.src || !audio.paused) {
+            return;
+        }
+
+        audio.play().catch(() => {
+            // iOS may require another user gesture after an interruption.
+            // Keep the interruption state so a later visibility/focus event
+            // can try again instead of losing the song position.
+        });
+    }, 250);
+}
+
+// When the user returns to Safari after another video/app used the audio
+// session, attempt to continue the song from the exact position where it was
+// interrupted.
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+        attemptInterruptedPlaybackResume();
+    }
+});
+
+window.addEventListener("focus", () => {
+    attemptInterruptedPlaybackResume();
+});
+
+window.addEventListener("pageshow", () => {
+    attemptInterruptedPlaybackResume();
 });
 
 renderSongs();

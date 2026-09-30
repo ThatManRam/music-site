@@ -96,10 +96,31 @@
             return;
         }
 
+        const queue = Array.isArray(state.queue) ? state.queue : [];
+        const track = queue[state.currentIndex];
+
         writeState({
+            url: audio.src,
+            title: track?.title || state.title || "Unknown song",
+            path: track?.path || state.path || "",
+            drive_index: track?.drive_index ?? state.drive_index ?? null,
             currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
             playing: !audio.paused
         });
+    }
+
+    function syncCurrentTrackState() {
+        const queue = Array.isArray(state.queue) ? state.queue : [];
+        const track = queue[state.currentIndex];
+        if (!track) {
+            return;
+        }
+
+        state.url = track.url;
+        state.title = track.title || "Unknown song";
+        state.path = track.path || "";
+        state.drive_index = track.drive_index ?? null;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }
 
     function showCurrentTrack() {
@@ -114,6 +135,7 @@
 
         root.hidden = false;
         title.textContent = "Now playing: " + (track.title || "Unknown song");
+        syncCurrentTrackState();
         updateControls();
         updateProgress();
     }
@@ -202,6 +224,10 @@
         state.currentIndex = safeIndex;
         state.currentTime = wasDifferent ? 0 : state.currentTime;
         state.playing = Boolean(shouldPlay);
+        state.url = track.url;
+        state.title = track.title || "Unknown song";
+        state.path = track.path || "";
+        state.drive_index = track.drive_index ?? null;
 
         if (wasDifferent && state.shuffle) {
             const history = Array.isArray(state.history) ? state.history.slice() : [];
@@ -502,13 +528,19 @@
         getState: () => readState()
     };
 
-    if (state.url && Array.isArray(state.queue) && state.queue.length) {
+    if (Array.isArray(state.queue) && state.queue.length) {
         const current = state.queue[state.currentIndex] || {
             title: state.title,
-            url: state.url
+            url: state.url,
+            path: state.path,
+            drive_index: state.drive_index
         };
-        showCurrentTrack();
-        loadTrack(current, Boolean(state.playing), true);
+
+        if (current && current.url) {
+            syncCurrentTrackState();
+            showCurrentTrack();
+            loadTrack(current, Boolean(state.playing), true);
+        }
     }
 
     updateControls();

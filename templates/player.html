@@ -131,7 +131,8 @@ function renderSongs() {
         title.className = "song-title";
         title.textContent = song.title;
 
-        const isPlaying = saved && saved.url === song.url && saved.playing;
+        const isPlaying = saved && saved.queue && saved.queue[saved.currentIndex] &&
+            saved.queue[saved.currentIndex].url === song.url && saved.playing;
         if (isPlaying) {
             row.classList.add("playing");
         }

@@ -5,51 +5,53 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Music Player</title>
 <style>
-body{margin:0;background:#101216;color:#eee;font-family:system-ui,sans-serif}
+body{margin:0;background:#101216;color:#eee;font-family:system-ui,sans-serif;padding-bottom:78px}
 main{max-width:1000px;margin:auto;padding:20px}
 .card{background:#181b21;padding:20px;border-radius:14px;margin:14px 0}
 nav{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}
 a{color:#80aaff}
-button,select{padding:10px;border-radius:8px;border:1px solid #383d48;background:#0e1014;color:#fff}
+button,select,input{padding:10px;border-radius:8px;border:1px solid #383d48;background:#0e1014;color:#fff}
 button{cursor:pointer;background:#2b6df3;border:0}
 button.danger{background:#a52b2b}
 #songList{display:grid;gap:8px}
 .song{padding:12px;background:#0e1014;border-radius:9px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .song-title{flex:1;min-width:180px}
-audio{width:100%;margin:10px 0}
-.persistent-player{position:fixed;top:0;left:0;right:0;z-index:100;background:#181b21;border-bottom:1px solid #383d48;box-shadow:0 4px 14px rgba(0,0,0,.3)}
-.persistent-player-inner{max-width:1000px;margin:auto;padding:8px 20px;display:grid;grid-template-columns:minmax(120px,1fr) minmax(260px,2fr) auto;gap:10px;align-items:center}
-.persistent-player-inner strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.persistent-player-inner audio{margin:0;width:100%}
-body:has(.persistent-player:not([hidden])){padding-top:72px}
-@media(max-width:600px){.persistent-player-inner{padding:7px 10px;grid-template-columns:1fr auto}.persistent-player-inner audio{grid-column:1 / -1}.persistent-player-inner a{font-size:.85rem}}
-.player-dock{position:sticky;top:0;z-index:20;background:#181b21;border:1px solid #2d323c;border-radius:14px;padding:14px;margin:14px 0;box-shadow:0 6px 18px rgba(0,0,0,.28)}
-.controls{display:flex;gap:8px;flex-wrap:wrap}
-.controls button{min-height:44px}
+.persistent-player{position:fixed;left:0;right:0;bottom:0;z-index:1000;background:#181b21;border-top:1px solid #383d48;box-shadow:0 -4px 14px rgba(0,0,0,.35)}
+.persistent-player-inner{max-width:1000px;margin:auto;padding:8px 20px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.mini-song{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.95rem;font-weight:600}
+.mini-controls{display:flex;gap:6px;align-items:center}
+.mini-controls button{width:44px;height:44px;padding:0;font-size:18px;display:grid;place-items:center}
+.mini-controls #miniPlayPause{width:48px;font-size:20px}
+.persistent-player audio{display:none}
 .song.playing{outline:2px solid #32b85a;background:#13251a}
 .song.playing .play-button{background:#24a148}
 .song.play-button{background:#2b6df3}
-@media (max-width:600px){
+@media(max-width:600px){
+  body{padding-bottom:70px}
   main{padding:10px}
   .card{padding:12px}
-  .player-dock{top:0;margin:8px 0 14px;padding:10px}
-  .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  .controls button{width:100%;min-height:48px;font-size:16px}
-  #playPause{grid-column:1 / -1}
+  .persistent-player-inner{padding:7px 10px;grid-template-columns:minmax(0,1fr) auto}
+  .mini-song{font-size:.88rem}
+  .mini-controls{gap:4px}
+  .mini-controls button{width:40px;height:40px}
+  .mini-controls #miniPlayPause{width:44px}
   .song{align-items:stretch}
   .song-title{min-width:0;width:100%}
   .song .play-button{flex:1;min-height:44px}
   .song select,.song .move-button{min-height:44px}
 }
-
 </style>
 </head>
 <body>
 <div id="persistentPlayer" class="persistent-player" hidden>
   <div class="persistent-player-inner">
-    <strong id="persistentTitle">Nothing playing</strong>
-    <audio id="audio" controls preload="metadata" playsinline></audio>
-    <a href="{{ url_for('player') }}">Open Player</a>
+    <div class="mini-song" id="persistentTitle">Nothing playing</div>
+    <div class="mini-controls" aria-label="Music controls">
+      <button id="miniPrevious" type="button" aria-label="Previous song">⏮</button>
+      <button id="miniPlayPause" type="button" aria-label="Play or pause">▶</button>
+      <button id="miniNext" type="button" aria-label="Next song">⏭</button>
+    </div>
+    <audio id="audio" preload="metadata" playsinline></audio>
   </div>
 </div>
 <main>
@@ -79,16 +81,6 @@ body:has(.persistent-player:not([hidden])){padding-top:72px}
 <input id="songSearch" type="search" maxlength="100" placeholder="Search songs..." autocomplete="off">
 <p id="songSearchStatus"></p>
 
-<div class="player-dock">
-<p id="nowPlaying">Nothing playing</p>
-<div class="controls">
-<button id="previous" type="button">Previous</button>
-<button id="playPause" type="button">Play / Pause</button>
-<button id="next" type="button">Next</button>
-<button id="loopToggle" type="button" aria-pressed="false">Loop: Off</button>
-<button id="autoplayToggle" type="button" aria-pressed="true">Autoplay: On</button>
-</div>
-</div>
 <div id="songList"></div>
 </section>
 
@@ -99,6 +91,9 @@ const playlists = {{ playlists|tojson }};
 const persistentPlayer = document.getElementById("persistentPlayer");
 const persistentTitle = document.getElementById("persistentTitle");
 const persistentStorageKey = "musicPlayerState";
+const miniPrevious = document.getElementById("miniPrevious");
+const miniPlayPause = document.getElementById("miniPlayPause");
+const miniNext = document.getElementById("miniNext");
 
 function savePlayerState(song) {
     if (!song || !song.url) {
@@ -109,6 +104,8 @@ function savePlayerState(song) {
         title: song.title,
         url: song.url,
         playlist: select ? select.value : "",
+        queue: currentSongs,
+        currentIndex,
         currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
         playing: !audio.paused
     }));
@@ -126,6 +123,10 @@ function restorePlayerState() {
             return;
         }
 
+        if (state.playlist && playlists[state.playlist]) {
+            select.value = state.playlist;
+        }
+
         audio.src = state.url;
         audio.addEventListener("loadedmetadata", () => {
             if (Number.isFinite(state.currentTime) && state.currentTime > 0) {
@@ -133,9 +134,17 @@ function restorePlayerState() {
                     audio.currentTime = Math.min(state.currentTime, audio.duration || state.currentTime);
                 } catch (_) {}
             }
+            if (state.playing) {
+                audio.play().catch(() => {});
+            }
         }, { once: true });
         persistentTitle.textContent = "Now playing: " + (state.title || "Unknown song");
         persistentPlayer.hidden = false;
+        updateMiniPlayButton(Boolean(state.playing));
+        if (Array.isArray(state.queue) && state.queue.length) {
+            currentSongs = state.queue;
+            currentIndex = Number.isInteger(state.currentIndex) ? Math.max(0, Math.min(state.currentIndex, currentSongs.length - 1)) : 0;
+        }
     } catch (_) {
         localStorage.removeItem(persistentStorageKey);
     }
@@ -146,9 +155,6 @@ const audio = document.getElementById("audio");
 const list = document.getElementById("songList");
 const songSearch = document.getElementById("songSearch");
 const songSearchStatus = document.getElementById("songSearchStatus");
-const nowPlaying = document.getElementById("nowPlaying");
-const loopToggle = document.getElementById("loopToggle");
-const autoplayToggle = document.getElementById("autoplayToggle");
 let currentIndex = 0;
 let currentSongs = [];
 let autoplayEnabled = true;
@@ -242,6 +248,11 @@ function renderSongs() {
     });
 }
 
+function updateMiniPlayButton(isPlaying) {
+    miniPlayPause.textContent = isPlaying ? "⏸" : "▶";
+    miniPlayPause.setAttribute("aria-label", isPlaying ? "Pause" : "Play");
+}
+
 function playSong(index) {
     if (!currentSongs[index]) {
         return;
@@ -255,8 +266,8 @@ function playSong(index) {
     persistentPlayer.hidden = false;
     savePlayerState(song);
     audio.play().catch(() => {});
-    nowPlaying.textContent = "Now playing: " + song.title;
     updateMediaSession(song);
+    updateMiniPlayButton(true);
     renderSongs();
 }
 
@@ -321,7 +332,6 @@ async function moveSong(song, destination) {
         interruptedPlayback = false;
         audio.pause();
         audio.removeAttribute("src");
-        nowPlaying.textContent = "Nothing playing";
     }
 
     renderSongs();
@@ -339,15 +349,16 @@ select.addEventListener("change", () => {
     interruptedPlayback = false;
     audio.pause();
     audio.removeAttribute("src");
-    nowPlaying.textContent = "Nothing playing";
     renderSongs();
 });
 
-document.getElementById("playPause").addEventListener("click", () => {
+
+miniPrevious.addEventListener("click", previousSong);
+miniNext.addEventListener("click", nextSong);
+miniPlayPause.addEventListener("click", () => {
     if (audio.paused) {
         interruptedPlayback = false;
         intentionalPause = false;
-
         if (!audio.src && currentSongs.length) {
             playSong(currentIndex);
         } else {
@@ -360,26 +371,12 @@ document.getElementById("playPause").addEventListener("click", () => {
     }
 });
 
-document.getElementById("next").addEventListener("click", nextSong);
-document.getElementById("previous").addEventListener("click", previousSong);
-
 audio.addEventListener("ended", () => {
     if (autoplayEnabled && !audio.loop) {
         nextSong();
     }
 });
 
-loopToggle.addEventListener("click", () => {
-    audio.loop = !audio.loop;
-    loopToggle.setAttribute("aria-pressed", String(audio.loop));
-    loopToggle.textContent = audio.loop ? "Loop: On" : "Loop: Off";
-});
-
-autoplayToggle.addEventListener("click", () => {
-    autoplayEnabled = !autoplayEnabled;
-    autoplayToggle.setAttribute("aria-pressed", String(autoplayEnabled));
-    autoplayToggle.textContent = autoplayEnabled ? "Autoplay: On" : "Autoplay: Off";
-});
 
 document.getElementById("createButton").addEventListener("click", async () => {
     const input = document.getElementById("newPlaylist");
@@ -488,6 +485,7 @@ audio.addEventListener("play", () => {
     intentionalPause = false;
     interruptedPlayback = false;
 
+    updateMiniPlayButton(true);
     if ("mediaSession" in navigator) {
         navigator.mediaSession.playbackState = "playing";
     }
@@ -518,6 +516,7 @@ audio.addEventListener("timeupdate", () => {
 });
 
 audio.addEventListener("pause", () => {
+    updateMiniPlayButton(false);
     if ("mediaSession" in navigator) {
         navigator.mediaSession.playbackState = "paused";
     }
@@ -596,8 +595,8 @@ window.addEventListener("pageshow", () => {
     attemptInterruptedPlaybackResume();
 });
 
-renderSongs();
 restorePlayerState();
+renderSongs();
 </script>
 </main>
 </body>

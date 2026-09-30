@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 state/
+*.zip
 
 cookies.txt
 *.cookies

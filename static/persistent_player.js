@@ -472,9 +472,17 @@
                         replacement.setAttribute(attribute.name, attribute.value);
                     }
                     if (!replacement.src) {
+                        // The fetched page has a different CSP nonce from the
+                        // currently loaded document. Always replace it with
+                        // the nonce authorized for this document.
                         const activeNonceScript = document.querySelector("script[nonce]");
                         if (activeNonceScript) {
-                            replacement.setAttribute("nonce", activeNonceScript.getAttribute("nonce"));
+                            replacement.setAttribute(
+                                "nonce",
+                                activeNonceScript.getAttribute("nonce")
+                            );
+                        } else {
+                            replacement.removeAttribute("nonce");
                         }
                     }
                     replacement.textContent = oldScript.textContent

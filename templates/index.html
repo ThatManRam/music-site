@@ -18,15 +18,27 @@ nav{display:flex;gap:16px;flex-wrap:wrap}
 .progress-label{display:flex;justify-content:space-between;gap:12px;margin:8px 0;font-size:.95rem}.progress-track{height:18px;background:#0b0d11;border:1px solid #383d48;border-radius:999px;overflow:hidden}.progress-track.small{height:12px}.progress-fill{height:100%;width:0;background:#2b6df3;transition:width .2s ease}.progress-fill[aria-busy="true"]{opacity:.75}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
 
+
 .persistent-player{position:fixed;left:0;right:0;bottom:0;z-index:1000;background:#181b21;border-top:1px solid #383d48;box-shadow:0 -4px 14px rgba(0,0,0,.35)}
-.persistent-player-inner{max-width:1100px;margin:auto;padding:8px 20px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
-.mini-song{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.95rem;font-weight:600}
-.mini-controls{display:flex;gap:6px;align-items:center}
-.mini-controls button{width:44px;height:44px;padding:0;font-size:18px;display:grid;place-items:center;border:0;border-radius:8px;background:#2b6df3;color:#fff}
+.persistent-player-inner{max-width:1100px;margin:auto;padding:7px 14px;display:grid;grid-template-columns:minmax(140px,1fr) auto;gap:6px 12px;align-items:center}
+.mini-song{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.88rem;font-weight:600}
+.mini-controls{display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.mini-controls button{min-width:38px;height:38px;padding:0 8px;font-size:15px;display:grid;place-items:center;border:0;border-radius:7px;background:#2b6df3;color:#fff;cursor:pointer}
+.mini-controls button.active{background:#24a148}
 .mini-controls button:disabled{opacity:.4;cursor:not-allowed}
+.mini-progress{grid-column:1 / -1;display:grid;grid-template-columns:auto minmax(80px,1fr) auto;gap:8px;align-items:center;font-size:.75rem;color:#aeb6c3}
+.mini-progress input{width:100%;margin:0;padding:0;accent-color:#2b6df3}
 .persistent-player audio{display:none}
-body{padding-bottom:70px}
-@media(max-width:600px){.persistent-player-inner{padding:7px 10px}.mini-song{font-size:.88rem}.mini-controls{gap:4px}.mini-controls button{width:40px;height:40px}.persistent-player-inner{grid-template-columns:minmax(0,1fr) auto}}
+body{padding-bottom:92px}
+@media(max-width:600px){
+  .persistent-player-inner{padding:6px 8px;grid-template-columns:1fr}
+  .mini-song{font-size:.82rem}
+  .mini-controls{justify-content:center}
+  .mini-controls button{min-width:36px;height:36px;padding:0 6px;font-size:14px}
+  .mini-progress{gap:5px}
+  body{padding-bottom:112px}
+}
+
 </style>
 </head>
 <body>
@@ -37,6 +49,14 @@ body{padding-bottom:70px}
       <button id="miniPrevious" type="button" aria-label="Previous song">⏮</button>
       <button id="miniPlayPause" type="button" aria-label="Play or pause">▶</button>
       <button id="miniNext" type="button" aria-label="Next song">⏭</button>
+      <button id="miniAutoplay" type="button" aria-label="Toggle autoplay" aria-pressed="true">AUTO</button>
+      <button id="miniLoop" type="button" aria-label="Toggle loop" aria-pressed="false">↻</button>
+      <button id="miniShuffle" type="button" aria-label="Toggle shuffle" aria-pressed="false">🔀</button>
+    </div>
+    <div class="mini-progress">
+      <span id="miniCurrentTime">0:00</span>
+      <input id="miniProgress" type="range" min="0" max="0" value="0" step="0.1" aria-label="Song position" disabled>
+      <span id="miniDuration">0:00</span>
     </div>
     <audio id="persistentAudio" preload="metadata" playsinline></audio>
   </div>
@@ -259,160 +279,6 @@ document.getElementById("createPlaylist").addEventListener("click", async () => 
 });
 </script>
 </main>
-<script nonce="{{ csp_nonce }}">
-(function () {
-    const storageKey = "musicPlayerState";
-    const bar = document.getElementById("persistentPlayer");
-    const title = document.getElementById("persistentTitle");
-    const previous = document.getElementById("miniPrevious");
-    const playPause = document.getElementById("miniPlayPause");
-    const next = document.getElementById("miniNext");
-    const audio = document.getElementById("persistentAudio");
-
-    if (!bar || !title || !previous || !playPause || !next || !audio) {
-        return;
-    }
-
-    let state = null;
-
-    function readState() {
-        try {
-            state = JSON.parse(localStorage.getItem(storageKey) || "null");
-        } catch (_) {
-            state = null;
-        }
-        return state;
-    }
-
-    function writeState(updates) {
-        const current = readState() || {};
-        const updated = Object.assign(current, updates);
-        localStorage.setItem(storageKey, JSON.stringify(updated));
-        state = updated;
-    }
-
-    if ("mediaSession" in navigator) {
-        try { navigator.mediaSession.setActionHandler("play", function () { audio.play().catch(function () {}); }); } catch (_) {}
-        try { navigator.mediaSession.setActionHandler("pause", function () { audio.pause(); }); } catch (_) {}
-        try { navigator.mediaSession.setActionHandler("previoustrack", function () { changeTrack(-1); }); } catch (_) {}
-        try { navigator.mediaSession.setActionHandler("nexttrack", function () { changeTrack(1); }); } catch (_) {}
-    }
-
-    function updatePlayButton() {
-        const playing = !audio.paused;
-        playPause.textContent = playing ? "⏸" : "▶";
-        playPause.setAttribute("aria-label", playing ? "Pause" : "Play");
-    }
-
-    function updateTrackButtons() {
-        const current = readState();
-        const hasQueue = current && Array.isArray(current.queue) && current.queue.length > 1;
-        previous.disabled = !hasQueue;
-        next.disabled = !hasQueue;
-    }
-
-    function loadTrack(track, shouldPlay) {
-        if (!track || !track.url) {
-            return;
-        }
-
-        audio.src = track.url;
-        title.textContent = "Now playing: " + (track.title || "Unknown song");
-        bar.hidden = false;
-        updateTrackButtons();
-
-        audio.addEventListener("loadedmetadata", function restorePosition() {
-            const current = readState();
-            if (current && Number.isFinite(current.currentTime) && current.currentTime > 0) {
-                try {
-                    audio.currentTime = Math.min(current.currentTime, audio.duration || current.currentTime);
-                } catch (_) {}
-            }
-
-            if (shouldPlay) {
-                audio.play().catch(function () {});
-            }
-        }, { once: true });
-    }
-
-    function changeTrack(direction) {
-        const current = readState();
-        if (!current || !Array.isArray(current.queue) || !current.queue.length) {
-            return;
-        }
-
-        let index = Number.isInteger(current.currentIndex) ? current.currentIndex : 0;
-        index = (index + direction + current.queue.length) % current.queue.length;
-
-        const track = current.queue[index];
-        writeState({
-            title: track.title,
-            url: track.url,
-            currentIndex: index,
-            currentTime: 0,
-            playing: true
-        });
-        loadTrack(track, true);
-    }
-
-    readState();
-    if (!state || !state.url) {
-        return;
-    }
-
-    title.textContent = "Now playing: " + (state.title || "Unknown song");
-    bar.hidden = false;
-    updateTrackButtons();
-    loadTrack({ title: state.title, url: state.url }, Boolean(state.playing));
-
-    previous.addEventListener("click", function () {
-        changeTrack(-1);
-    });
-
-    next.addEventListener("click", function () {
-        changeTrack(1);
-    });
-
-    playPause.addEventListener("click", function () {
-        if (audio.paused) {
-            audio.play().catch(function () {});
-        } else {
-            audio.pause();
-        }
-    });
-
-    audio.addEventListener("play", function () {
-        writeState({
-            playing: true,
-            currentTime: audio.currentTime
-        });
-        updatePlayButton();
-    });
-
-    audio.addEventListener("pause", function () {
-        writeState({
-            playing: false,
-            currentTime: audio.currentTime
-        });
-        updatePlayButton();
-    });
-
-    audio.addEventListener("timeupdate", function () {
-        writeState({
-            currentTime: audio.currentTime,
-            playing: !audio.paused
-        });
-    });
-
-    audio.addEventListener("ended", function () {
-        const current = readState();
-        if (current && Array.isArray(current.queue) && current.queue.length) {
-            changeTrack(1);
-        }
-    });
-
-    updatePlayButton();
-})();
-</script>
+<script src="{{ url_for('static', filename='persistent_player.js') }}"></script>
 </body>
 </html>

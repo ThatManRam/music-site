@@ -17,29 +17,25 @@ button.danger{background:#a52b2b}
 .song{padding:12px;background:#0e1014;border-radius:9px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .song-title{flex:1;min-width:180px}
 .persistent-player{position:fixed;left:0;right:0;bottom:0;z-index:1000;background:#181b21;border-top:1px solid #383d48;box-shadow:0 -4px 14px rgba(0,0,0,.35)}
-.persistent-player-inner{max-width:1000px;margin:auto;padding:8px 20px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
-.mini-song{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.95rem;font-weight:600}
-.mini-controls{display:flex;gap:6px;align-items:center}
-.mini-controls button{width:44px;height:44px;padding:0;font-size:18px;display:grid;place-items:center}
-.mini-controls #miniPlayPause{width:48px;font-size:20px}
+.persistent-player-inner{max-width:1100px;margin:auto;padding:7px 14px;display:grid;grid-template-columns:minmax(140px,1fr) auto;gap:6px 12px;align-items:center}
+.mini-song{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.88rem;font-weight:600}
+.mini-controls{display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.mini-controls button{min-width:38px;height:38px;padding:0 8px;font-size:15px;display:grid;place-items:center;border:0;border-radius:7px;background:#2b6df3;color:#fff;cursor:pointer}
+.mini-controls button.active{background:#24a148}
+.mini-controls button:disabled{opacity:.4;cursor:not-allowed}
+.mini-progress{grid-column:1 / -1;display:grid;grid-template-columns:auto minmax(80px,1fr) auto;gap:8px;align-items:center;font-size:.75rem;color:#aeb6c3}
+.mini-progress input{width:100%;margin:0;padding:0;accent-color:#2b6df3}
 .persistent-player audio{display:none}
-.song.playing{outline:2px solid #32b85a;background:#13251a}
-.song.playing .play-button{background:#24a148}
-.song.play-button{background:#2b6df3}
+body{padding-bottom:92px}
 @media(max-width:600px){
-  body{padding-bottom:70px}
-  main{padding:10px}
-  .card{padding:12px}
-  .persistent-player-inner{padding:7px 10px;grid-template-columns:minmax(0,1fr) auto}
-  .mini-song{font-size:.88rem}
-  .mini-controls{gap:4px}
-  .mini-controls button{width:40px;height:40px}
-  .mini-controls #miniPlayPause{width:44px}
-  .song{align-items:stretch}
-  .song-title{min-width:0;width:100%}
-  .song .play-button{flex:1;min-height:44px}
-  .song select,.song .move-button{min-height:44px}
+  .persistent-player-inner{padding:6px 8px;grid-template-columns:1fr}
+  .mini-song{font-size:.82rem}
+  .mini-controls{justify-content:center}
+  .mini-controls button{min-width:36px;height:36px;padding:0 6px;font-size:14px}
+  .mini-progress{gap:5px}
+  body{padding-bottom:112px}
 }
+
 </style>
 </head>
 <body>
@@ -50,8 +46,16 @@ button.danger{background:#a52b2b}
       <button id="miniPrevious" type="button" aria-label="Previous song">⏮</button>
       <button id="miniPlayPause" type="button" aria-label="Play or pause">▶</button>
       <button id="miniNext" type="button" aria-label="Next song">⏭</button>
+      <button id="miniAutoplay" type="button" aria-label="Toggle autoplay" aria-pressed="true">AUTO</button>
+      <button id="miniLoop" type="button" aria-label="Toggle loop" aria-pressed="false">↻</button>
+      <button id="miniShuffle" type="button" aria-label="Toggle shuffle" aria-pressed="false">🔀</button>
     </div>
-    <audio id="audio" preload="metadata" playsinline></audio>
+    <div class="mini-progress">
+      <span id="miniCurrentTime">0:00</span>
+      <input id="miniProgress" type="range" min="0" max="0" value="0" step="0.1" aria-label="Song position" disabled>
+      <span id="miniDuration">0:00</span>
+    </div>
+    <audio id="persistentAudio" preload="metadata" playsinline></audio>
   </div>
 </div>
 <main>
@@ -88,83 +92,12 @@ button.danger{background:#a52b2b}
 const csrfToken = {{ csrf_token|tojson }};
 const playlists = {{ playlists|tojson }};
 
-const persistentPlayer = document.getElementById("persistentPlayer");
-const persistentTitle = document.getElementById("persistentTitle");
-const persistentStorageKey = "musicPlayerState";
-const miniPrevious = document.getElementById("miniPrevious");
-const miniPlayPause = document.getElementById("miniPlayPause");
-const miniNext = document.getElementById("miniNext");
-
-function savePlayerState(song) {
-    if (!song || !song.url) {
-        return;
-    }
-
-    localStorage.setItem(persistentStorageKey, JSON.stringify({
-        title: song.title,
-        url: song.url,
-        playlist: select ? select.value : "",
-        queue: currentSongs,
-        currentIndex,
-        currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
-        playing: !audio.paused
-    }));
-}
-
-function restorePlayerState() {
-    try {
-        const raw = localStorage.getItem(persistentStorageKey);
-        if (!raw) {
-            return;
-        }
-
-        const state = JSON.parse(raw);
-        if (!state || !state.url) {
-            return;
-        }
-
-        if (state.playlist && playlists[state.playlist]) {
-            select.value = state.playlist;
-        }
-
-        audio.src = state.url;
-        audio.addEventListener("loadedmetadata", () => {
-            if (Number.isFinite(state.currentTime) && state.currentTime > 0) {
-                try {
-                    audio.currentTime = Math.min(state.currentTime, audio.duration || state.currentTime);
-                } catch (_) {}
-            }
-            if (state.playing) {
-                audio.play().catch(() => {});
-            }
-        }, { once: true });
-        persistentTitle.textContent = "Now playing: " + (state.title || "Unknown song");
-        persistentPlayer.hidden = false;
-        updateMiniPlayButton(Boolean(state.playing));
-        if (Array.isArray(state.queue) && state.queue.length) {
-            currentSongs = state.queue;
-            currentIndex = Number.isInteger(state.currentIndex) ? Math.max(0, Math.min(state.currentIndex, currentSongs.length - 1)) : 0;
-        }
-    } catch (_) {
-        localStorage.removeItem(persistentStorageKey);
-    }
-}
-
 const select = document.getElementById("playlistSelect");
-const audio = document.getElementById("audio");
 const list = document.getElementById("songList");
 const songSearch = document.getElementById("songSearch");
 const songSearchStatus = document.getElementById("songSearchStatus");
 let currentIndex = 0;
 let currentSongs = [];
-let autoplayEnabled = true;
-
-// iOS/Safari can pause a web audio element when another app or video takes
-// control of the device audio session. Keep track of whether the pause was
-// intentional so we can distinguish a user pause from an interruption.
-let intentionalPause = false;
-let interruptedPlayback = false;
-let resumeAttemptTimer = null;
 
 for (const name of Object.keys(playlists)) {
     const option = document.createElement("option");
@@ -173,36 +106,22 @@ for (const name of Object.keys(playlists)) {
     select.appendChild(option);
 }
 
-function updateMediaSession(song) {
-    if (!("mediaSession" in navigator) || !("MediaMetadata" in window)) {
-        return;
-    }
-
-    navigator.mediaSession.metadata = new MediaMetadata({
-        title: song.title,
-        artist: "Local Music Library",
-        album: select.value
-    });
+const savedPlayerState = window.PersistentPlayer ? window.PersistentPlayer.getState() : null;
+if (savedPlayerState && savedPlayerState.playlist && playlists[savedPlayerState.playlist]) {
+    select.value = savedPlayerState.playlist;
 }
 
 function renderSongs() {
     const allSongs = playlists[select.value] || [];
     const query = songSearch.value.trim().toLocaleLowerCase();
-
-    currentSongs = allSongs.filter(song => {
-        if (!query) {
-            return true;
-        }
-        return song.title.toLocaleLowerCase().includes(query);
-    });
+    currentSongs = allSongs.filter(song => !query || song.title.toLocaleLowerCase().includes(query));
 
     list.replaceChildren();
+    songSearchStatus.textContent = query
+        ? `${currentSongs.length} of ${allSongs.length} song${allSongs.length === 1 ? "" : "s"} found.`
+        : "";
 
-    if (query) {
-        songSearchStatus.textContent = `${currentSongs.length} of ${allSongs.length} song${allSongs.length === 1 ? "" : "s"} found.`;
-    } else {
-        songSearchStatus.textContent = "";
-    }
+    const saved = window.PersistentPlayer ? window.PersistentPlayer.getState() : null;
 
     currentSongs.forEach((song, index) => {
         const row = document.createElement("div");
@@ -212,9 +131,7 @@ function renderSongs() {
         title.className = "song-title";
         title.textContent = song.title;
 
-        const isPlaying = currentSongs[index] === currentSongs[currentIndex] &&
-            audio.src && !audio.paused;
-
+        const isPlaying = saved && saved.url === song.url && saved.playing;
         if (isPlaying) {
             row.classList.add("playing");
         }
@@ -223,11 +140,15 @@ function renderSongs() {
         play.type = "button";
         play.className = "play-button";
         play.textContent = isPlaying ? "Playing" : "Play";
-        play.setAttribute("aria-pressed", String(isPlaying));
-        play.addEventListener("click", () => playSong(index));
+        play.addEventListener("click", () => {
+            currentIndex = index;
+            if (window.PersistentPlayer) {
+                window.PersistentPlayer.setQueue(currentSongs, index, select.value, true);
+            }
+            renderSongs();
+        });
 
         const moveSelect = document.createElement("select");
-
         for (const destination of Object.keys(playlists)) {
             if (destination !== select.value) {
                 const option = document.createElement("option");
@@ -246,49 +167,6 @@ function renderSongs() {
         row.append(title, play, moveSelect, move);
         list.appendChild(row);
     });
-}
-
-function updateMiniPlayButton(isPlaying) {
-    miniPlayPause.textContent = isPlaying ? "⏸" : "▶";
-    miniPlayPause.setAttribute("aria-label", isPlaying ? "Pause" : "Play");
-}
-
-function playSong(index) {
-    if (!currentSongs[index]) {
-        return;
-    }
-
-    currentIndex = index;
-    const song = currentSongs[index];
-
-    audio.src = song.url;
-    persistentTitle.textContent = "Now playing: " + song.title;
-    persistentPlayer.hidden = false;
-    savePlayerState(song);
-    audio.play().catch(() => {});
-    updateMediaSession(song);
-    updateMiniPlayButton(true);
-    renderSongs();
-}
-
-function nextSong() {
-    if (!currentSongs.length) {
-        return;
-    }
-
-    currentIndex = (currentIndex + 1) % currentSongs.length;
-    playSong(currentIndex);
-}
-
-function previousSong() {
-    if (!currentSongs.length) {
-        return;
-    }
-
-    currentIndex =
-        (currentIndex - 1 + currentSongs.length) % currentSongs.length;
-
-    playSong(currentIndex);
 }
 
 async function moveSong(song, destination) {
@@ -310,7 +188,6 @@ async function moveSong(song, destination) {
     });
 
     const data = await response.json();
-
     if (!response.ok) {
         alert(data.error || "Could not move song.");
         return;
@@ -322,17 +199,7 @@ async function moveSong(song, destination) {
     );
 
     playlists[destination] = playlists[destination] || [];
-    playlists[destination].push({
-        ...song,
-        path: destination + "/" + song.filename
-    });
-
-    if (currentSongs[currentIndex] === song) {
-        intentionalPause = true;
-        interruptedPlayback = false;
-        audio.pause();
-        audio.removeAttribute("src");
-    }
+    playlists[destination].push({ ...song, path: destination + "/" + song.filename });
 
     renderSongs();
 }
@@ -345,43 +212,12 @@ songSearch.addEventListener("input", () => {
 select.addEventListener("change", () => {
     currentIndex = 0;
     songSearch.value = "";
-    intentionalPause = true;
-    interruptedPlayback = false;
-    audio.pause();
-    audio.removeAttribute("src");
     renderSongs();
 });
-
-
-miniPrevious.addEventListener("click", previousSong);
-miniNext.addEventListener("click", nextSong);
-miniPlayPause.addEventListener("click", () => {
-    if (audio.paused) {
-        interruptedPlayback = false;
-        intentionalPause = false;
-        if (!audio.src && currentSongs.length) {
-            playSong(currentIndex);
-        } else {
-            audio.play().catch(() => {});
-        }
-    } else {
-        intentionalPause = true;
-        interruptedPlayback = false;
-        audio.pause();
-    }
-});
-
-audio.addEventListener("ended", () => {
-    if (autoplayEnabled && !audio.loop) {
-        nextSong();
-    }
-});
-
 
 document.getElementById("createButton").addEventListener("click", async () => {
     const input = document.getElementById("newPlaylist");
     const name = input.value.trim();
-
     if (!name || name.length > 64) {
         alert("Invalid playlist name.");
         return;
@@ -389,215 +225,43 @@ document.getElementById("createButton").addEventListener("click", async () => {
 
     const response = await fetch("{{ url_for('create_playlist_route') }}", {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken
-        },
-        body: JSON.stringify({name})
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
+        body: JSON.stringify({ name })
     });
-
     const data = await response.json();
-
     if (!response.ok) {
         alert(data.error || "Could not create playlist.");
         return;
     }
-
     window.location.reload();
 });
 
 document.getElementById("deleteButton").addEventListener("click", async () => {
     const name = select.value;
-
     if (!name || name === "Singles") {
         alert("Singles cannot be deleted.");
         return;
     }
-
     if (!confirm("Permanently delete this playlist and its files?")) {
         return;
     }
 
     const response = await fetch("{{ url_for('delete_playlist_route') }}", {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken
-        },
-        body: JSON.stringify({name})
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
+        body: JSON.stringify({ name })
     });
-
     const data = await response.json();
-
     if (!response.ok) {
         alert(data.error || "Could not delete playlist.");
         return;
     }
-
     window.location.reload();
 });
 
-// -------------------------------------------------------------------------
-// Media Session controls
-//
-// Only register track navigation here. In iPhone Safari, registering the
-// seekbackward/seekforward/seekto actions can cause the Lock Screen / Control
-// Center to show the +/- 10 second controls instead of Previous / Next Track.
-// The audio element still supports normal seeking from the player itself.
-// -------------------------------------------------------------------------
-
-if ("mediaSession" in navigator) {
-    try {
-        navigator.mediaSession.setActionHandler("play", () => {
-            if (!audio.src && currentSongs.length) {
-                playSong(currentIndex);
-                return;
-            }
-
-            audio.play().catch(() => {});
-        });
-    } catch (_) {}
-
-    try {
-        navigator.mediaSession.setActionHandler("pause", () => {
-            // A pause command from the iPhone Lock Screen is intentional.
-            intentionalPause = true;
-            interruptedPlayback = false;
-            audio.pause();
-        });
-    } catch (_) {}
-
-    try {
-        navigator.mediaSession.setActionHandler("nexttrack", () => {
-            nextSong();
-        });
-    } catch (_) {}
-
-    try {
-        navigator.mediaSession.setActionHandler("previoustrack", () => {
-            previousSong();
-        });
-    } catch (_) {}
-}
-
-audio.addEventListener("play", () => {
-    // A successful play means the interruption has been recovered.
-    intentionalPause = false;
-    interruptedPlayback = false;
-
-    updateMiniPlayButton(true);
-    if ("mediaSession" in navigator) {
-        navigator.mediaSession.playbackState = "playing";
-    }
-    const state = localStorage.getItem(persistentStorageKey);
-    if (state) {
-        try {
-            const saved = JSON.parse(state);
-            saved.playing = true;
-            saved.currentTime = audio.currentTime;
-            localStorage.setItem(persistentStorageKey, JSON.stringify(saved));
-        } catch (_) {}
-    }
-    renderSongs();
-});
-
-audio.addEventListener("timeupdate", () => {
-    const state = localStorage.getItem(persistentStorageKey);
-    if (!state || !audio.src) {
-        return;
-    }
-
-    try {
-        const saved = JSON.parse(state);
-        saved.currentTime = audio.currentTime;
-        saved.playing = !audio.paused;
-        localStorage.setItem(persistentStorageKey, JSON.stringify(saved));
-    } catch (_) {}
-});
-
-audio.addEventListener("pause", () => {
-    updateMiniPlayButton(false);
-    if ("mediaSession" in navigator) {
-        navigator.mediaSession.playbackState = "paused";
-    }
-
-    // Do not treat an intentional user pause as an interruption. If Safari
-    // pauses the audio because another app/video takes over, this event is
-    // not preceded by our intentional-pause flag, so remember the playback
-    // position and try to resume when Safari becomes active again.
-    if (
-        !intentionalPause &&
-        audio.src &&
-        Number.isFinite(audio.currentTime) &&
-        audio.currentTime > 0 &&
-        (!Number.isFinite(audio.duration) || audio.currentTime < audio.duration - 0.25)
-    ) {
-        interruptedPlayback = true;
-    }
-
-    const state = localStorage.getItem(persistentStorageKey);
-    if (state) {
-        try {
-            const saved = JSON.parse(state);
-            saved.currentTime = audio.currentTime;
-            saved.playing = interruptedPlayback;
-            localStorage.setItem(persistentStorageKey, JSON.stringify(saved));
-        } catch (_) {}
-    }
-
-    intentionalPause = false;
-    renderSongs();
-});
-
-function attemptInterruptedPlaybackResume() {
-    if (!interruptedPlayback || !audio.src || !audio.paused) {
-        return;
-    }
-
-    if (document.visibilityState !== "visible") {
-        return;
-    }
-
-    if (resumeAttemptTimer !== null) {
-        window.clearTimeout(resumeAttemptTimer);
-    }
-
-    // Give Safari a moment to release the audio session from the other video.
-    resumeAttemptTimer = window.setTimeout(() => {
-        resumeAttemptTimer = null;
-
-        if (!interruptedPlayback || !audio.src || !audio.paused) {
-            return;
-        }
-
-        audio.play().catch(() => {
-            // iOS may require another user gesture after an interruption.
-            // Keep the interruption state so a later visibility/focus event
-            // can try again instead of losing the song position.
-        });
-    }, 250);
-}
-
-// When the user returns to Safari after another video/app used the audio
-// session, attempt to continue the song from the exact position where it was
-// interrupted.
-document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-        attemptInterruptedPlaybackResume();
-    }
-});
-
-window.addEventListener("focus", () => {
-    attemptInterruptedPlaybackResume();
-});
-
-window.addEventListener("pageshow", () => {
-    attemptInterruptedPlaybackResume();
-});
-
-restorePlayerState();
 renderSongs();
 </script>
 </main>
+<script src="{{ url_for('static', filename='persistent_player.js') }}"></script>
 </body>
 </html>

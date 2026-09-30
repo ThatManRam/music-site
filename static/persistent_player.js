@@ -468,8 +468,11 @@
                 // using that new nonce would cause Firefox CSP to reject the
                 // dynamically executed inline scripts.
                 const activeNonceScript = document.querySelector("script[nonce]");
+                // Browsers intentionally hide nonce values from getAttribute("nonce").
+                // Use the DOM nonce property so dynamically created scripts receive
+                // the same nonce authorized by the current response CSP.
                 const activeNonce = activeNonceScript
-                    ? activeNonceScript.getAttribute("nonce")
+                    ? activeNonceScript.nonce
                     : null;
 
                 currentMain.replaceWith(nextMain);

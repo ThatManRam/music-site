@@ -27,7 +27,7 @@
         currentTime: 0,
         playing: false,
         autoplay: true,
-        loop: false,
+        loop: true,
         shuffle: false,
         history: []
     };

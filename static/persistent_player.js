@@ -463,6 +463,15 @@
                     return;
                 }
 
+                // Capture the nonce from the currently loaded document BEFORE
+                // replacing <main>. The fetched page has a different nonce, and
+                // using that new nonce would cause Firefox CSP to reject the
+                // dynamically executed inline scripts.
+                const activeNonceScript = document.querySelector("script[nonce]");
+                const activeNonce = activeNonceScript
+                    ? activeNonceScript.getAttribute("nonce")
+                    : null;
+
                 currentMain.replaceWith(nextMain);
                 document.title = documentFromResponse.title;
 
@@ -472,15 +481,8 @@
                         replacement.setAttribute(attribute.name, attribute.value);
                     }
                     if (!replacement.src) {
-                        // The fetched page has a different CSP nonce from the
-                        // currently loaded document. Always replace it with
-                        // the nonce authorized for this document.
-                        const activeNonceScript = document.querySelector("script[nonce]");
-                        if (activeNonceScript) {
-                            replacement.setAttribute(
-                                "nonce",
-                                activeNonceScript.getAttribute("nonce")
-                            );
+                        if (activeNonce) {
+                            replacement.setAttribute("nonce", activeNonce);
                         } else {
                             replacement.removeAttribute("nonce");
                         }

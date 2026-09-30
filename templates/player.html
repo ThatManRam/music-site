@@ -17,6 +17,12 @@ button.danger{background:#a52b2b}
 .song{padding:12px;background:#0e1014;border-radius:9px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .song-title{flex:1;min-width:180px}
 audio{width:100%;margin:10px 0}
+.persistent-player{position:fixed;top:0;left:0;right:0;z-index:100;background:#181b21;border-bottom:1px solid #383d48;box-shadow:0 4px 14px rgba(0,0,0,.3)}
+.persistent-player-inner{max-width:1000px;margin:auto;padding:8px 20px;display:grid;grid-template-columns:minmax(120px,1fr) minmax(260px,2fr) auto;gap:10px;align-items:center}
+.persistent-player-inner strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.persistent-player-inner audio{margin:0;width:100%}
+body:has(.persistent-player:not([hidden])){padding-top:72px}
+@media(max-width:600px){.persistent-player-inner{padding:7px 10px;grid-template-columns:1fr auto}.persistent-player-inner audio{grid-column:1 / -1}.persistent-player-inner a{font-size:.85rem}}
 .player-dock{position:sticky;top:0;z-index:20;background:#181b21;border:1px solid #2d323c;border-radius:14px;padding:14px;margin:14px 0;box-shadow:0 6px 18px rgba(0,0,0,.28)}
 .controls{display:flex;gap:8px;flex-wrap:wrap}
 .controls button{min-height:44px}
@@ -39,6 +45,13 @@ audio{width:100%;margin:10px 0}
 </style>
 </head>
 <body>
+<div id="persistentPlayer" class="persistent-player" hidden>
+  <div class="persistent-player-inner">
+    <strong id="persistentTitle">Nothing playing</strong>
+    <audio id="audio" controls preload="metadata" playsinline></audio>
+    <a href="{{ url_for('player') }}">Open Player</a>
+  </div>
+</div>
 <main>
 <nav>
 <a href="{{ url_for('index') }}">Downloader</a>
@@ -68,8 +81,6 @@ audio{width:100%;margin:10px 0}
 
 <div class="player-dock">
 <p id="nowPlaying">Nothing playing</p>
-<audio id="audio" controls preload="metadata"></audio>
-
 <div class="controls">
 <button id="previous" type="button">Previous</button>
 <button id="playPause" type="button">Play / Pause</button>
@@ -84,6 +95,51 @@ audio{width:100%;margin:10px 0}
 <script nonce="{{ csp_nonce }}">
 const csrfToken = {{ csrf_token|tojson }};
 const playlists = {{ playlists|tojson }};
+
+const persistentPlayer = document.getElementById("persistentPlayer");
+const persistentTitle = document.getElementById("persistentTitle");
+const persistentStorageKey = "musicPlayerState";
+
+function savePlayerState(song) {
+    if (!song || !song.url) {
+        return;
+    }
+
+    localStorage.setItem(persistentStorageKey, JSON.stringify({
+        title: song.title,
+        url: song.url,
+        playlist: select ? select.value : "",
+        currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
+        playing: !audio.paused
+    }));
+}
+
+function restorePlayerState() {
+    try {
+        const raw = localStorage.getItem(persistentStorageKey);
+        if (!raw) {
+            return;
+        }
+
+        const state = JSON.parse(raw);
+        if (!state || !state.url) {
+            return;
+        }
+
+        audio.src = state.url;
+        audio.addEventListener("loadedmetadata", () => {
+            if (Number.isFinite(state.currentTime) && state.currentTime > 0) {
+                try {
+                    audio.currentTime = Math.min(state.currentTime, audio.duration || state.currentTime);
+                } catch (_) {}
+            }
+        }, { once: true });
+        persistentTitle.textContent = "Now playing: " + (state.title || "Unknown song");
+        persistentPlayer.hidden = false;
+    } catch (_) {
+        localStorage.removeItem(persistentStorageKey);
+    }
+}
 
 const select = document.getElementById("playlistSelect");
 const audio = document.getElementById("audio");
@@ -195,6 +251,9 @@ function playSong(index) {
     const song = currentSongs[index];
 
     audio.src = song.url;
+    persistentTitle.textContent = "Now playing: " + song.title;
+    persistentPlayer.hidden = false;
+    savePlayerState(song);
     audio.play().catch(() => {});
     nowPlaying.textContent = "Now playing: " + song.title;
     updateMediaSession(song);
@@ -432,7 +491,30 @@ audio.addEventListener("play", () => {
     if ("mediaSession" in navigator) {
         navigator.mediaSession.playbackState = "playing";
     }
+    const state = localStorage.getItem(persistentStorageKey);
+    if (state) {
+        try {
+            const saved = JSON.parse(state);
+            saved.playing = true;
+            saved.currentTime = audio.currentTime;
+            localStorage.setItem(persistentStorageKey, JSON.stringify(saved));
+        } catch (_) {}
+    }
     renderSongs();
+});
+
+audio.addEventListener("timeupdate", () => {
+    const state = localStorage.getItem(persistentStorageKey);
+    if (!state || !audio.src) {
+        return;
+    }
+
+    try {
+        const saved = JSON.parse(state);
+        saved.currentTime = audio.currentTime;
+        saved.playing = !audio.paused;
+        localStorage.setItem(persistentStorageKey, JSON.stringify(saved));
+    } catch (_) {}
 });
 
 audio.addEventListener("pause", () => {
@@ -452,6 +534,16 @@ audio.addEventListener("pause", () => {
         (!Number.isFinite(audio.duration) || audio.currentTime < audio.duration - 0.25)
     ) {
         interruptedPlayback = true;
+    }
+
+    const state = localStorage.getItem(persistentStorageKey);
+    if (state) {
+        try {
+            const saved = JSON.parse(state);
+            saved.currentTime = audio.currentTime;
+            saved.playing = interruptedPlayback;
+            localStorage.setItem(persistentStorageKey, JSON.stringify(saved));
+        } catch (_) {}
     }
 
     intentionalPause = false;
@@ -505,6 +597,7 @@ window.addEventListener("pageshow", () => {
 });
 
 renderSongs();
+restorePlayerState();
 </script>
 </main>
 </body>

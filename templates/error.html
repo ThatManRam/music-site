@@ -7,11 +7,48 @@
 <style>
 body{background:#101216;color:#eee;font-family:system-ui,sans-serif;padding:40px}
 a{color:#80aaff}
+.persistent-player{position:fixed;top:0;left:0;right:0;z-index:100;background:#181b21;border-bottom:1px solid #383d48;box-shadow:0 4px 14px rgba(0,0,0,.3);color:#eee;font-family:system-ui,sans-serif}
+.persistent-player-inner{max-width:1000px;margin:auto;padding:8px 20px;display:grid;grid-template-columns:minmax(120px,1fr) minmax(260px,2fr) auto;gap:10px;align-items:center}
+.persistent-player-inner strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.persistent-player-inner audio{margin:0;width:100%}.persistent-player-inner a{color:#80aaff;white-space:nowrap}
+@media(max-width:600px){.persistent-player-inner{padding:7px 10px;grid-template-columns:1fr auto}.persistent-player-inner audio{grid-column:1 / -1}.persistent-player-inner a{font-size:.85rem}}
 </style>
 </head>
 <body>
+<div id="persistentPlayer" class="persistent-player" hidden>
+  <div class="persistent-player-inner">
+    <strong id="persistentTitle">Nothing playing</strong>
+    <audio id="persistentAudio" controls preload="metadata" playsinline></audio>
+    <a href="/player">Open Player</a>
+  </div>
+</div>
 <h1>Error {{ code }}</h1>
 <p>{{ message }}</p>
 <a href="{{ url_for('index') }}">Return to Music Server</a>
+<script nonce="{{ csp_nonce }}">
+(function () {
+    const storageKey = "musicPlayerState";
+    const bar = document.getElementById("persistentPlayer");
+    const title = document.getElementById("persistentTitle");
+    const audio = document.getElementById("persistentAudio");
+
+    if (!bar || !title || !audio) return;
+
+    try {
+        const state = JSON.parse(localStorage.getItem(storageKey) || "null");
+        if (!state || !state.url) return;
+        title.textContent = "Now playing: " + (state.title || "Unknown song");
+        audio.src = state.url;
+        audio.addEventListener("loadedmetadata", function () {
+            if (Number.isFinite(state.currentTime) && state.currentTime > 0) {
+                try { audio.currentTime = Math.min(state.currentTime, audio.duration || state.currentTime); } catch (_) {}
+            }
+            if (state.playing) audio.play().catch(function () {});
+        }, { once: true });
+        bar.hidden = false;
+    } catch (_) {
+        localStorage.removeItem(storageKey);
+    }
+})();
+</script>
 </body>
 </html>

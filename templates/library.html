@@ -33,9 +33,23 @@ audio{width:100%;max-width:560px;margin-top:9px}
   .song{grid-template-columns:1fr}
   .song-actions{justify-content:flex-start}
 }
+.persistent-player{position:fixed;top:0;left:0;right:0;z-index:100;background:#181b21;border-bottom:1px solid #383d48;box-shadow:0 4px 14px rgba(0,0,0,.3)}
+.persistent-player-inner{max-width:1100px;margin:auto;padding:8px 20px;display:grid;grid-template-columns:minmax(120px,1fr) minmax(260px,2fr) auto;gap:10px;align-items:center}
+.persistent-player-inner strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.persistent-player-inner audio{margin:0;width:100%}
+.persistent-player-inner a{color:#80aaff;white-space:nowrap}
+body{padding-top:72px}
+@media(max-width:600px){.persistent-player-inner{padding:7px 10px;grid-template-columns:1fr auto}.persistent-player-inner audio{grid-column:1 / -1}.persistent-player-inner a{font-size:.85rem}}
 </style>
 </head>
 <body>
+<div id="persistentPlayer" class="persistent-player" hidden>
+  <div class="persistent-player-inner">
+    <strong id="persistentTitle">Nothing playing</strong>
+    <audio id="persistentAudio" controls preload="metadata" playsinline></audio>
+    <a href="/player">Open Player</a>
+  </div>
+</div>
 <main>
 <nav>
 <a href="{{ url_for('index') }}">Downloader</a>
@@ -270,5 +284,72 @@ loadButton.addEventListener("click", loadPlaylist);
 playlistSelect.addEventListener("change", loadPlaylist);
 </script>
 </main>
+<script nonce="{{ csp_nonce }}">
+(function () {
+    const storageKey = "musicPlayerState";
+    const bar = document.getElementById("persistentPlayer");
+    const title = document.getElementById("persistentTitle");
+    const audio = document.getElementById("persistentAudio");
+
+    if (!bar || !title || !audio) {
+        return;
+    }
+
+    try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) {
+            return;
+        }
+
+        const state = JSON.parse(raw);
+        if (!state || !state.url) {
+            return;
+        }
+
+        title.textContent = "Now playing: " + (state.title || "Unknown song");
+        audio.src = state.url;
+        audio.addEventListener("loadedmetadata", function () {
+            if (Number.isFinite(state.currentTime) && state.currentTime > 0) {
+                try {
+                    audio.currentTime = Math.min(state.currentTime, audio.duration || state.currentTime);
+                } catch (_) {}
+            }
+            if (state.playing) {
+                audio.play().catch(function () {});
+            }
+        }, { once: true });
+        bar.hidden = false;
+
+        audio.addEventListener("timeupdate", function () {
+            try {
+                const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+                saved.currentTime = audio.currentTime;
+                saved.playing = !audio.paused;
+                localStorage.setItem(storageKey, JSON.stringify(saved));
+            } catch (_) {}
+        });
+
+        audio.addEventListener("pause", function () {
+            try {
+                const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+                saved.currentTime = audio.currentTime;
+                saved.playing = false;
+                localStorage.setItem(storageKey, JSON.stringify(saved));
+            } catch (_) {}
+        });
+
+        audio.addEventListener("ended", function () {
+            try {
+                const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+                saved.currentTime = 0;
+                saved.playing = false;
+                localStorage.setItem(storageKey, JSON.stringify(saved));
+            } catch (_) {}
+        });
+    } catch (_) {
+        localStorage.removeItem(storageKey);
+    }
+})();
+</script>
 </body>
 </html>

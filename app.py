@@ -1,9 +1,9 @@
 import json
 import os
+import subprocess
 import re
 import secrets
 import shutil
-import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -38,11 +38,12 @@ if load_dotenv is not None:
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
-RESET_SCRIPT = BASE_DIR / "reset.sh"
 STATE_DIR = Path(os.environ.get("MUSIC_STATE_DIR", BASE_DIR / "state")).resolve()
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 DOWNLOAD_ARCHIVE = STATE_DIR / "downloads.txt"
+RESET_SCRIPT = BASE_DIR / "reset.sh"
+RESET_LOG = STATE_DIR / "reset.log"
 NOTICE_DIR = STATE_DIR / "notices"
 NOTICE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1809,34 +1810,28 @@ def login():
     return render_template("login.html")
 
 
-@app.post("/logout")
-@login_required
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
-
-
-@app.post("/reset")
+@app.post("/api/reset")
 @login_required
 def reset_application():
-    if not rate_limit("reset-request", 1, 60):
-        flash("Reset is already being started. Please wait a moment.", "error")
-        return redirect(url_for("index"))
+    """Run the project-local reset.sh script outside the request lifetime."""
+    if not rate_limit("reset", 1, 5 * 60):
+        return jsonify(error="Reset was recently started. Try again later."), 429
 
-    if not RESET_SCRIPT.is_file() or RESET_SCRIPT.is_symlink():
-        flash("reset.sh was not found in the application directory.", "error")
-        return redirect(url_for("index"))
+    if not RESET_SCRIPT.is_file():
+        return jsonify(error="reset.sh was not found in the application directory."), 500
 
-    try:
-        RESET_SCRIPT.chmod(RESET_SCRIPT.stat().st_mode | 0o100)
-    except OSError:
-        pass
-
-    log_path = STATE_DIR / "reset.log"
+    if not os.access(RESET_SCRIPT, os.R_OK):
+        return jsonify(error="reset.sh is not readable by the music service."), 500
 
     try:
-        log_handle = log_path.open("ab")
-        subprocess.Popen(
+        RESET_LOG.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = RESET_LOG.open("ab", buffering=0)
+        log_handle.write(("\n\n===== reset started %s =====\n" % time.strftime("%Y-%m-%d %H:%M:%S %z")).encode())
+
+        # reset.sh is intentionally launched as a detached process because the
+        # script normally ends by restarting this service. Waiting for it here
+        # would make the HTTP request race with the service shutdown.
+        process = subprocess.Popen(
             ["/bin/bash", str(RESET_SCRIPT)],
             cwd=str(BASE_DIR),
             stdin=subprocess.DEVNULL,
@@ -1845,16 +1840,23 @@ def reset_application():
             start_new_session=True,
             close_fds=True,
         )
-        flash("Reset script started.", "success")
-    except OSError:
-        app.logger.exception("Failed to start reset.sh")
+        log_handle.close()
+    except OSError as exc:
         try:
             log_handle.close()
-        except UnboundLocalError:
+        except Exception:
             pass
-        flash("Could not start reset.sh.", "error")
+        app.logger.exception("Could not start reset script")
+        return jsonify(error=f"Could not start reset.sh: {exc}"), 500
 
-    return redirect(url_for("index"))
+    return jsonify(message="Reset started. The server may restart shortly.", pid=process.pid), 202
+
+
+@app.post("/logout")
+@login_required
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 @app.post("/download")

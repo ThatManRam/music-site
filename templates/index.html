@@ -13,7 +13,8 @@ input,select{width:100%;box-sizing:border-box;margin:6px 0 14px}
 button{cursor:pointer;background:#2b6df3;border:0}
 button.danger{background:#a52b2b}
 a{color:#80aaff}
-nav{display:flex;gap:16px;flex-wrap:wrap;align-items:center}.nav-spacer{flex:1}.reset-form{margin:0}.reset-button{background:#a52b2b!important}
+nav{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+.nav-spacer{flex:1 1 auto}.reset-button{background:#8f2525}.reset-button:hover{background:#aa3030}
 .message{padding:10px;border-radius:8px;margin:8px 0}.success{background:#183d28}.error{background:#4b2020}
 .progress-label{display:flex;justify-content:space-between;gap:12px;margin:8px 0;font-size:.95rem}.progress-track{height:18px;background:#0b0d11;border:1px solid #383d48;border-radius:999px;overflow:hidden}.progress-track.small{height:12px}.progress-fill{height:100%;width:0;background:#2b6df3;transition:width .2s ease}.progress-fill[aria-busy="true"]{opacity:.75}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
@@ -112,11 +113,8 @@ body{padding-bottom:92px}
 <a href="{{ url_for('index') }}">Downloader</a>
 <a href="{{ url_for('player') }}">Player</a>
 <a href="{{ url_for('library') }}">Library</a>
-<div class="nav-spacer"></div>
-<form method="post" action="{{ url_for('reset_application') }}" class="reset-form" id="resetForm">
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-<button type="submit" class="reset-button">Reset</button>
-</form>
+<span class="nav-spacer"></span>
+<button id="resetButton" type="button" class="reset-button">Reset</button>
 <form method="post" action="{{ url_for('logout') }}" style="display:inline">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <button type="submit">Log out</button>
@@ -202,12 +200,6 @@ body{padding-bottom:92px}
 <script nonce="{{ csp_nonce }}">
 const csrfToken = {{ csrf_token|tojson }};
 
-document.getElementById("resetForm").addEventListener("submit", (event) => {
-    if (!window.confirm("Run reset.sh now? This may reset or delete application data.")) {
-        event.preventDefault();
-    }
-});
-
 const downloadForm = document.getElementById("downloadForm");
 const downloadButton = downloadForm.querySelector("button[type=submit]");
 const progressPanel = document.getElementById("downloadProgress");
@@ -217,6 +209,48 @@ const progressCurrent = document.getElementById("progressCurrent");
 const progressMessage = document.getElementById("progressMessage");
 const playlistProgressBar = document.getElementById("playlistProgressBar");
 const trackProgressBar = document.getElementById("trackProgressBar");
+const resetButton = document.getElementById("resetButton");
+
+resetButton.addEventListener("click", async () => {
+    const confirmed = window.confirm(
+        "Run reset.sh now? This will git pull and restart the music-site service."
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    resetButton.disabled = true;
+    resetButton.textContent = "Resetting…";
+
+    try {
+        const response = await fetch("{{ url_for('reset_application') }}", {
+            method: "POST",
+            headers: {
+                "X-CSRFToken": csrfToken,
+                "Accept": "application/json"
+            },
+            cache: "no-store"
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            throw new Error(data.error || "Could not start reset.sh.");
+        }
+
+        resetButton.textContent = "Reset started";
+        window.setTimeout(() => {
+            resetButton.textContent = "Reset";
+            resetButton.disabled = false;
+        }, 5000);
+    } catch (error) {
+        resetButton.textContent = "Reset failed";
+        window.alert(error.message || "Could not start reset.sh.");
+        resetButton.disabled = false;
+        resetButton.textContent = "Reset";
+    }
+});
 
 function setProgressBar(element, percent, label) {
     const value = Math.max(0, Math.min(100, Number(percent) || 0));

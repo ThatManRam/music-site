@@ -198,3 +198,32 @@ Songs in the selected playlist can be renamed or deleted from the Library page. 
 
 The Player page still uses the complete library view because it is intended to expose the combined player library.
 
+
+## Downloader Reset button
+
+The Downloader page now has a **Reset** button in the top-right navigation. It:
+
+1. asks for confirmation;
+2. sends an authenticated, CSRF-protected request to `/api/reset`;
+3. starts the `reset.sh` file from the same directory as `app.py` without waiting for it to finish;
+4. writes the script's output to `state/reset.log` (or the configured `MUSIC_STATE_DIR/reset.log`).
+
+The project-local `reset.sh` should contain the reset commands you want to run, for example:
+
+```bash
+#!/bin/bash
+set -e
+cd "$(dirname "$0")"
+git pull
+sudo systemctl restart music-site
+```
+
+Make it executable with:
+
+```bash
+chmod +x reset.sh
+```
+
+The button does **not** embed the reset commands in the Flask application; it runs the `reset.sh` file that is present beside `app.py`. This means updating `reset.sh` on the Raspberry Pi changes what the button runs.
+
+Because `reset.sh` restarts the service, the endpoint deliberately returns before the script completes. If the service account needs `sudo` permission for `systemctl restart music-site` or permission to run `git pull`, configure those permissions for the account running the music service.

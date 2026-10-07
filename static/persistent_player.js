@@ -12,7 +12,9 @@
     const shuffleButton = document.getElementById("miniShuffle");
     const shufflePlaylistButton = document.getElementById("miniShufflePlaylist");
     const shuffleMenu = document.getElementById("miniShuffleMenu");
-    const shufflePlaylistSelect = document.getElementById("miniShufflePlaylistSelect");
+    const shufflePlaylistOptions = document.getElementById("miniShufflePlaylistOptions");
+    const shufflePlaylistSelectAll = document.getElementById("miniShufflePlaylistSelectAll");
+    const shufflePlaylistClear = document.getElementById("miniShufflePlaylistClear");
     const shufflePlaylistApply = document.getElementById("miniShufflePlaylistApply");
     const shuffleStatus = document.getElementById("miniShuffleStatus");
     const volumeButton = document.getElementById("miniVolume");
@@ -27,7 +29,8 @@
 
     if (!root || !title || !previousButton || !playButton || !nextButton ||
         !autoplayButton || !loopButton || !shuffleButton || !shufflePlaylistButton ||
-        !shuffleMenu || !shufflePlaylistSelect || !shufflePlaylistApply || !shuffleStatus ||
+        !shuffleMenu || !shufflePlaylistOptions || !shufflePlaylistSelectAll || !shufflePlaylistClear ||
+        !shufflePlaylistApply || !shuffleStatus ||
         !volumeButton || !volumeMenu || !volumeSlider || !volumeValue || !slider ||
         !currentTimeLabel || !durationLabel || !bufferedBar || !audio) {
         return;
@@ -42,6 +45,7 @@
         loop: false,
         shuffle: false,
         shufflePlaylist: "",
+        shufflePlaylists: [],
         history: [],
         volume: 1
     };
@@ -49,10 +53,14 @@
     if (!Object.prototype.hasOwnProperty.call(state, "shufflePlaylist")) {
         state.shufflePlaylist = "";
     }
+    if (!Array.isArray(state.shufflePlaylists)) {
+        state.shufflePlaylists = state.shufflePlaylist ? [state.shufflePlaylist] : [];
+    }
+    state.shufflePlaylists = state.shufflePlaylists.filter(name => typeof name === "string" && name.length > 0);
     if (!Number.isFinite(Number(state.volume))) {
         state.volume = 1;
     }
-    state.volume = Math.max(0, Math.min(1, Number(state.volume)));
+    state.volume = Math.max(0, Math.min(2, Number(state.volume)));
 
     let playlistNamesLoaded = false;
     let playlistNamesLoading = null;
@@ -61,6 +69,45 @@
     let interruptedPlayback = false;
     let resumeTimer = null;
     let loadedUrl = "";
+    let audioContext = null;
+    let mediaSourceNode = null;
+    let gainNode = null;
+
+    function ensureAudioGraph() {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) {
+            return false;
+        }
+
+        try {
+            if (!audioContext) {
+                audioContext = new AudioContextClass();
+                mediaSourceNode = audioContext.createMediaElementSource(audio);
+                gainNode = audioContext.createGain();
+                mediaSourceNode.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+            }
+
+            if (audioContext.state === "suspended") {
+                audioContext.resume().catch(() => {});
+            }
+
+            applyGain();
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function applyGain() {
+        const volume = Math.max(0, Math.min(2, Number(state.volume)));
+        if (gainNode) {
+            gainNode.gain.value = volume;
+        }
+        // Keep the native element at 100% once Web Audio is active. The GainNode
+        // handles both normal volume and the 100%-200% amplification range.
+        audio.volume = 1;
+    }
 
     function readState() {
         try {
@@ -86,25 +133,33 @@
     }
 
     function updateVolumeUi() {
-        const volume = Math.max(0, Math.min(1, Number(state.volume)));
+        const volume = Math.max(0, Math.min(2, Number(state.volume)));
         volumeSlider.value = String(volume);
         volumeValue.textContent = `${Math.round(volume * 100)}%`;
+        volumeSlider.setAttribute("aria-valuetext", `${Math.round(volume * 100)}%${volume > 1 ? " amplified" : ""}`);
         if (volume === 0) {
             volumeButton.textContent = "🔇";
             volumeButton.setAttribute("aria-label", "Volume muted");
-        } else if (volume < 0.5) {
+        } else if (volume <= 0.5) {
             volumeButton.textContent = "🔉";
             volumeButton.setAttribute("aria-label", "Volume");
-        } else {
+        } else if (volume <= 1) {
             volumeButton.textContent = "🔊";
             volumeButton.setAttribute("aria-label", "Volume");
+        } else {
+            volumeButton.textContent = "📢";
+            volumeButton.setAttribute("aria-label", "Volume amplified");
         }
     }
 
     function setVolume(value) {
-        const volume = Math.max(0, Math.min(1, Number(value)));
-        audio.volume = volume;
+        const volume = Math.max(0, Math.min(2, Number(value)));
         writeState({ volume });
+        if (ensureAudioGraph()) {
+            applyGain();
+        } else {
+            audio.volume = Math.min(1, volume);
+        }
         updateVolumeUi();
     }
 
@@ -131,8 +186,49 @@
         volumeSlider.focus();
     }
 
+    function getSelectedShufflePlaylists() {
+        return Array.from(
+            shufflePlaylistOptions.querySelectorAll('input[type="checkbox"][data-playlist]')
+        )
+            .filter(input => input.checked)
+            .map(input => input.dataset.playlist);
+    }
+
+    function renderShufflePlaylistOptions(names) {
+        shufflePlaylistOptions.replaceChildren();
+        const selected = new Set(Array.isArray(state.shufflePlaylists) ? state.shufflePlaylists : []);
+
+        for (const name of names) {
+            const label = document.createElement("label");
+            label.className = "mini-shuffle-option";
+
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.dataset.playlist = name;
+            input.value = name;
+            input.checked = selected.has(name);
+
+            const text = document.createElement("span");
+            text.textContent = name;
+
+            label.appendChild(input);
+            label.appendChild(text);
+            shufflePlaylistOptions.appendChild(label);
+        }
+
+        updateShuffleSelectionStatus();
+    }
+
+    function updateShuffleSelectionStatus() {
+        const selected = getSelectedShufflePlaylists();
+        shuffleStatus.textContent = selected.length
+            ? `${selected.length} playlist${selected.length === 1 ? "" : "s"} selected.`
+            : "No playlists selected. Shuffle uses the current queue.";
+    }
+
     async function loadShufflePlaylists() {
         if (playlistNamesLoaded) {
+            updateShuffleSelectionStatus();
             return;
         }
         if (playlistNamesLoading) {
@@ -151,20 +247,11 @@
                 return response.json();
             })
             .then(data => {
-                const names = Array.isArray(data.playlists) ? data.playlists : [];
-                while (shufflePlaylistSelect.options.length > 1) {
-                    shufflePlaylistSelect.remove(1);
-                }
-                for (const name of names) {
-                    const option = document.createElement("option");
-                    option.value = name;
-                    option.textContent = name;
-                    shufflePlaylistSelect.appendChild(option);
-                }
-                const saved = state.shufflePlaylist || state.playlist || "";
-                shufflePlaylistSelect.value = names.includes(saved) ? saved : "";
+                const names = Array.isArray(data.playlists)
+                    ? data.playlists.filter(name => typeof name === "string")
+                    : [];
+                renderShufflePlaylistOptions(names);
                 playlistNamesLoaded = true;
-                shuffleStatus.textContent = "";
             })
             .catch(() => {
                 shuffleStatus.textContent = "Could not load playlists.";
@@ -177,37 +264,70 @@
     }
 
     async function applyShufflePlaylist() {
-        const selected = shufflePlaylistSelect.value;
-        if (!selected) {
-            writeState({ shufflePlaylist: "" });
+        const selected = getSelectedShufflePlaylists();
+        if (!selected.length) {
+            writeState({ shufflePlaylists: [], shufflePlaylist: "", shuffle: false });
             shuffleStatus.textContent = "Using the current queue.";
+            updateControls();
             closePopovers();
             return;
         }
 
-        shuffleStatus.textContent = "Loading playlist…";
+        shuffleStatus.textContent = `Loading ${selected.length} playlist${selected.length === 1 ? "" : "s"}…`;
+        shufflePlaylistApply.disabled = true;
+
         try {
-            const response = await fetch(`/api/library/${encodeURIComponent(selected)}`, {
-                credentials: "same-origin",
-                headers: { "Accept": "application/json" }
-            });
-            if (!response.ok) {
-                throw new Error("Playlist load failed");
+            const results = await Promise.all(selected.map(async name => {
+                const response = await fetch(`/api/library/${encodeURIComponent(name)}`, {
+                    credentials: "same-origin",
+                    headers: { "Accept": "application/json" }
+                });
+                if (!response.ok) {
+                    throw new Error(`Playlist load failed: ${name}`);
+                }
+                const data = await response.json();
+                return { name, songs: Array.isArray(data.songs) ? data.songs : [] };
+            }));
+
+            const combined = [];
+            const seen = new Set();
+            for (const result of results) {
+                for (const song of result.songs) {
+                    if (!song || !song.url) {
+                        continue;
+                    }
+                    const key = `${song.drive_index ?? ""}|${song.path || song.url}`;
+                    if (seen.has(key)) {
+                        continue;
+                    }
+                    seen.add(key);
+                    combined.push(song);
+                }
             }
-            const data = await response.json();
-            const songs = Array.isArray(data.songs) ? data.songs.filter(song => song && song.url) : [];
-            if (!songs.length) {
-                shuffleStatus.textContent = "That playlist has no playable songs.";
+
+            if (!combined.length) {
+                shuffleStatus.textContent = "The selected playlists have no playable songs.";
                 return;
             }
 
-            const randomIndex = Math.floor(Math.random() * songs.length);
-            setQueue(songs, randomIndex, selected, true);
-            writeState({ shufflePlaylist: selected, shuffle: true, history: [randomIndex] });
+            const randomIndex = Math.floor(Math.random() * combined.length);
+            const label = selected.length === 1
+                ? selected[0]
+                : `${selected.length} playlists`;
+
+            setQueue(combined, randomIndex, label, true);
+            writeState({
+                shufflePlaylists: selected,
+                shufflePlaylist: label,
+                shuffle: true,
+                history: [randomIndex]
+            });
             updateControls();
             closePopovers();
         } catch (_) {
-            shuffleStatus.textContent = "Could not load that playlist.";
+            shuffleStatus.textContent = "Could not load one or more playlists.";
+        } finally {
+            shufflePlaylistApply.disabled = false;
         }
     }
 
@@ -223,10 +343,11 @@
         autoplayButton.setAttribute("aria-pressed", String(Boolean(state.autoplay)));
         loopButton.setAttribute("aria-pressed", String(Boolean(state.loop)));
         shuffleButton.setAttribute("aria-pressed", String(Boolean(state.shuffle)));
-        shufflePlaylistButton.classList.toggle("active", Boolean(state.shufflePlaylist));
-        shufflePlaylistButton.setAttribute("aria-label", state.shufflePlaylist
-            ? `Shuffle playlist: ${state.shufflePlaylist}`
-            : "Choose shuffle playlist");
+        const selectedShuffleCount = Array.isArray(state.shufflePlaylists) ? state.shufflePlaylists.length : 0;
+        shufflePlaylistButton.classList.toggle("active", selectedShuffleCount > 0);
+        shufflePlaylistButton.setAttribute("aria-label", selectedShuffleCount > 0
+            ? `Choose shuffle playlists: ${selectedShuffleCount} selected`
+            : "Choose shuffle playlists");
 
         autoplayButton.classList.toggle("active", Boolean(state.autoplay));
         loopButton.classList.toggle("active", Boolean(state.loop));
@@ -374,6 +495,7 @@
             updateProgress();
 
             if (shouldPlay) {
+                ensureAudioGraph();
                 audio.play().catch(() => {
                     interruptedPlayback = true;
                     writeState({ playing: true });
@@ -424,7 +546,8 @@
             queue: cleanQueue,
             currentIndex: safeIndex,
             playlist: playlist || "",
-            shufflePlaylist: playlist || "",
+            shufflePlaylist: "",
+            shufflePlaylists: [],
             currentTime: 0,
             playing: Boolean(shouldPlay),
             history: [safeIndex]
@@ -537,6 +660,7 @@
                 return;
             }
 
+            ensureAudioGraph();
             audio.play().catch(() => {});
         }, 300);
     }
@@ -550,6 +674,26 @@
     });
 
     shufflePlaylistApply.addEventListener("click", applyShufflePlaylist);
+
+    shufflePlaylistSelectAll.addEventListener("click", () => {
+        shufflePlaylistOptions.querySelectorAll('input[type="checkbox"][data-playlist]').forEach(input => {
+            input.checked = true;
+        });
+        updateShuffleSelectionStatus();
+    });
+
+    shufflePlaylistClear.addEventListener("click", () => {
+        shufflePlaylistOptions.querySelectorAll('input[type="checkbox"][data-playlist]').forEach(input => {
+            input.checked = false;
+        });
+        updateShuffleSelectionStatus();
+    });
+
+    shufflePlaylistOptions.addEventListener("change", event => {
+        if (event.target.matches('input[type="checkbox"][data-playlist]')) {
+            updateShuffleSelectionStatus();
+        }
+    });
 
     volumeButton.addEventListener("click", () => {
         if (volumeMenu.hidden) {
@@ -582,6 +726,7 @@
         if (audio.paused) {
             intentionalPause = false;
             interruptedPlayback = false;
+            ensureAudioGraph();
             audio.play().catch(() => {});
         } else {
             intentionalPause = true;
@@ -685,6 +830,7 @@
         try {
             navigator.mediaSession.setActionHandler("play", () => {
                 intentionalPause = false;
+                ensureAudioGraph();
                 audio.play().catch(() => {});
             });
         } catch (_) {}
@@ -827,7 +973,9 @@
         }
     }
 
-    audio.volume = state.volume;
+    if (!ensureAudioGraph()) {
+        audio.volume = Math.min(1, state.volume);
+    }
     updateVolumeUi();
     updateControls();
     updateProgress();

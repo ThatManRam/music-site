@@ -1883,6 +1883,13 @@ def library():
     )
 
 
+@app.get("/api/playlists")
+@login_required
+def playlists_api():
+    """Return playlist names for persistent-player controls."""
+    return jsonify(playlists=get_playlist_names())
+
+
 @app.get("/api/library/<path:playlist_name>")
 @login_required
 def library_playlist_api(playlist_name):
@@ -2060,7 +2067,12 @@ def serve_music(drive_index, filename):
         max_age=0,
     )
 
-    response.headers["Cache-Control"] = "private, no-store"
+    # Do not let the browser treat local MP3 responses as reusable HTTP cache
+    # entries. The media element may still buffer data while a track is active,
+    # but the server response itself should not become a persistent cache item.
+    response.headers["Cache-Control"] = "private, no-store, max-age=0, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     response.headers["X-Content-Type-Options"] = "nosniff"
 
     return response

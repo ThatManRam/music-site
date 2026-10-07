@@ -10,6 +10,15 @@
     const autoplayButton = document.getElementById("miniAutoplay");
     const loopButton = document.getElementById("miniLoop");
     const shuffleButton = document.getElementById("miniShuffle");
+    const shufflePlaylistButton = document.getElementById("miniShufflePlaylist");
+    const shuffleMenu = document.getElementById("miniShuffleMenu");
+    const shufflePlaylistSelect = document.getElementById("miniShufflePlaylistSelect");
+    const shufflePlaylistApply = document.getElementById("miniShufflePlaylistApply");
+    const shuffleStatus = document.getElementById("miniShuffleStatus");
+    const volumeButton = document.getElementById("miniVolume");
+    const volumeMenu = document.getElementById("miniVolumeMenu");
+    const volumeSlider = document.getElementById("miniVolumeSlider");
+    const volumeValue = document.getElementById("miniVolumeValue");
     const slider = document.getElementById("miniProgress");
     const bufferedBar = document.getElementById("miniBuffered");
     const currentTimeLabel = document.getElementById("miniCurrentTime");
@@ -17,7 +26,9 @@
     const audio = document.getElementById("persistentAudio");
 
     if (!root || !title || !previousButton || !playButton || !nextButton ||
-        !autoplayButton || !loopButton || !shuffleButton || !slider ||
+        !autoplayButton || !loopButton || !shuffleButton || !shufflePlaylistButton ||
+        !shuffleMenu || !shufflePlaylistSelect || !shufflePlaylistApply || !shuffleStatus ||
+        !volumeButton || !volumeMenu || !volumeSlider || !volumeValue || !slider ||
         !currentTimeLabel || !durationLabel || !bufferedBar || !audio) {
         return;
     }
@@ -30,9 +41,21 @@
         autoplay: true,
         loop: false,
         shuffle: false,
-        history: []
+        shufflePlaylist: "",
+        history: [],
+        volume: 1
     };
 
+    if (!Object.prototype.hasOwnProperty.call(state, "shufflePlaylist")) {
+        state.shufflePlaylist = "";
+    }
+    if (!Number.isFinite(Number(state.volume))) {
+        state.volume = 1;
+    }
+    state.volume = Math.max(0, Math.min(1, Number(state.volume)));
+
+    let playlistNamesLoaded = false;
+    let playlistNamesLoading = null;
     let intentionalPause = false;
     let switchingTrack = false;
     let interruptedPlayback = false;
@@ -62,6 +85,132 @@
         return `${minutes}:${secs}`;
     }
 
+    function updateVolumeUi() {
+        const volume = Math.max(0, Math.min(1, Number(state.volume)));
+        volumeSlider.value = String(volume);
+        volumeValue.textContent = `${Math.round(volume * 100)}%`;
+        if (volume === 0) {
+            volumeButton.textContent = "🔇";
+            volumeButton.setAttribute("aria-label", "Volume muted");
+        } else if (volume < 0.5) {
+            volumeButton.textContent = "🔉";
+            volumeButton.setAttribute("aria-label", "Volume");
+        } else {
+            volumeButton.textContent = "🔊";
+            volumeButton.setAttribute("aria-label", "Volume");
+        }
+    }
+
+    function setVolume(value) {
+        const volume = Math.max(0, Math.min(1, Number(value)));
+        audio.volume = volume;
+        writeState({ volume });
+        updateVolumeUi();
+    }
+
+    function closePopovers() {
+        shuffleMenu.hidden = true;
+        volumeMenu.hidden = true;
+        shufflePlaylistButton.setAttribute("aria-expanded", "false");
+        volumeButton.setAttribute("aria-expanded", "false");
+    }
+
+    function openShuffleMenu() {
+        volumeMenu.hidden = true;
+        volumeButton.setAttribute("aria-expanded", "false");
+        shuffleMenu.hidden = false;
+        shufflePlaylistButton.setAttribute("aria-expanded", "true");
+        loadShufflePlaylists();
+    }
+
+    function openVolumeMenu() {
+        shuffleMenu.hidden = true;
+        shufflePlaylistButton.setAttribute("aria-expanded", "false");
+        volumeMenu.hidden = false;
+        volumeButton.setAttribute("aria-expanded", "true");
+        volumeSlider.focus();
+    }
+
+    async function loadShufflePlaylists() {
+        if (playlistNamesLoaded) {
+            return;
+        }
+        if (playlistNamesLoading) {
+            return playlistNamesLoading;
+        }
+
+        shuffleStatus.textContent = "Loading playlists…";
+        playlistNamesLoading = fetch("/api/playlists", {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error("Could not load playlists");
+                }
+                return response.json();
+            })
+            .then(data => {
+                const names = Array.isArray(data.playlists) ? data.playlists : [];
+                while (shufflePlaylistSelect.options.length > 1) {
+                    shufflePlaylistSelect.remove(1);
+                }
+                for (const name of names) {
+                    const option = document.createElement("option");
+                    option.value = name;
+                    option.textContent = name;
+                    shufflePlaylistSelect.appendChild(option);
+                }
+                const saved = state.shufflePlaylist || state.playlist || "";
+                shufflePlaylistSelect.value = names.includes(saved) ? saved : "";
+                playlistNamesLoaded = true;
+                shuffleStatus.textContent = "";
+            })
+            .catch(() => {
+                shuffleStatus.textContent = "Could not load playlists.";
+            })
+            .finally(() => {
+                playlistNamesLoading = null;
+            });
+
+        return playlistNamesLoading;
+    }
+
+    async function applyShufflePlaylist() {
+        const selected = shufflePlaylistSelect.value;
+        if (!selected) {
+            writeState({ shufflePlaylist: "" });
+            shuffleStatus.textContent = "Using the current queue.";
+            closePopovers();
+            return;
+        }
+
+        shuffleStatus.textContent = "Loading playlist…";
+        try {
+            const response = await fetch(`/api/library/${encodeURIComponent(selected)}`, {
+                credentials: "same-origin",
+                headers: { "Accept": "application/json" }
+            });
+            if (!response.ok) {
+                throw new Error("Playlist load failed");
+            }
+            const data = await response.json();
+            const songs = Array.isArray(data.songs) ? data.songs.filter(song => song && song.url) : [];
+            if (!songs.length) {
+                shuffleStatus.textContent = "That playlist has no playable songs.";
+                return;
+            }
+
+            const randomIndex = Math.floor(Math.random() * songs.length);
+            setQueue(songs, randomIndex, selected, true);
+            writeState({ shufflePlaylist: selected, shuffle: true, history: [randomIndex] });
+            updateControls();
+            closePopovers();
+        } catch (_) {
+            shuffleStatus.textContent = "Could not load that playlist.";
+        }
+    }
+
     function updateControls() {
         const hasQueue = Array.isArray(state.queue) && state.queue.length > 0;
         const hasMultiple = hasQueue && state.queue.length > 1;
@@ -74,6 +223,10 @@
         autoplayButton.setAttribute("aria-pressed", String(Boolean(state.autoplay)));
         loopButton.setAttribute("aria-pressed", String(Boolean(state.loop)));
         shuffleButton.setAttribute("aria-pressed", String(Boolean(state.shuffle)));
+        shufflePlaylistButton.classList.toggle("active", Boolean(state.shufflePlaylist));
+        shufflePlaylistButton.setAttribute("aria-label", state.shufflePlaylist
+            ? `Shuffle playlist: ${state.shufflePlaylist}`
+            : "Choose shuffle playlist");
 
         autoplayButton.classList.toggle("active", Boolean(state.autoplay));
         loopButton.classList.toggle("active", Boolean(state.loop));
@@ -173,6 +326,7 @@
         try {
             audio.pause();
             audio.removeAttribute("src");
+            audio.preload = "none";
             audio.load();
         } catch (_) {}
         loadedUrl = "";
@@ -270,6 +424,7 @@
             queue: cleanQueue,
             currentIndex: safeIndex,
             playlist: playlist || "",
+            shufflePlaylist: playlist || "",
             currentTime: 0,
             playing: Boolean(shouldPlay),
             history: [safeIndex]
@@ -385,6 +540,40 @@
             audio.play().catch(() => {});
         }, 300);
     }
+
+    shufflePlaylistButton.addEventListener("click", () => {
+        if (shuffleMenu.hidden) {
+            openShuffleMenu();
+        } else {
+            closePopovers();
+        }
+    });
+
+    shufflePlaylistApply.addEventListener("click", applyShufflePlaylist);
+
+    volumeButton.addEventListener("click", () => {
+        if (volumeMenu.hidden) {
+            openVolumeMenu();
+        } else {
+            closePopovers();
+        }
+    });
+
+    volumeSlider.addEventListener("input", () => {
+        setVolume(volumeSlider.value);
+    });
+
+    document.addEventListener("click", event => {
+        if (!event.target.closest(".mini-popover-wrap")) {
+            closePopovers();
+        }
+    });
+
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape") {
+            closePopovers();
+        }
+    });
 
     previousButton.addEventListener("click", previousTrack);
     nextButton.addEventListener("click", nextTrack);
@@ -638,6 +827,8 @@
         }
     }
 
+    audio.volume = state.volume;
+    updateVolumeUi();
     updateControls();
     updateProgress();
 }());

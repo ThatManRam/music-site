@@ -23,6 +23,16 @@ button.danger{background:#a52b2b}
 .mini-controls button{min-width:38px;height:38px;padding:0 8px;font-size:15px;display:grid;place-items:center;border:0;border-radius:7px;background:#2b6df3;color:#fff;cursor:pointer}
 .mini-controls button.active{background:#24a148}
 .mini-controls button:disabled{opacity:.4;cursor:not-allowed}
+.mini-popover-wrap{position:relative;display:flex;align-items:center}
+.mini-popover{position:absolute;right:0;bottom:46px;z-index:1100;min-width:230px;padding:12px;background:#181b21;border:1px solid #454b56;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.4);display:grid;gap:8px;text-align:left}
+.mini-popover[hidden]{display:none}
+.mini-popover label{font-size:.8rem;color:#aeb6c3}
+.mini-popover select,.mini-popover input,.mini-popover button{font:inherit;box-sizing:border-box;width:100%;min-height:38px;padding:8px 10px;border-radius:8px;border:1px solid #454b56;background:#0e1014;color:#fff}
+.mini-popover button{background:#2b6df3;border:0;cursor:pointer}
+.mini-popover-status{min-height:1.1em;font-size:.76rem;color:#aeb6c3;overflow-wrap:anywhere}
+.mini-volume-popover{min-width:190px}
+.mini-volume-popover input[type="range"]{padding:0;accent-color:#2b6df3}
+.mini-volume-popover output{font-size:.8rem;color:#aeb6c3;text-align:right}
 .mini-progress{grid-column:1 / -1;display:grid;grid-template-columns:auto minmax(80px,1fr) auto;gap:8px;align-items:center;font-size:.75rem;color:#aeb6c3}
 .mini-progress-track{position:relative;width:100%;height:20px;display:flex;align-items:center}
 .mini-progress-track .mini-buffered{position:absolute;left:0;right:auto;top:50%;height:4px;transform:translateY(-50%);width:0;background:#70757d;border-radius:3px;pointer-events:none}
@@ -50,7 +60,26 @@ body{padding-bottom:92px}
       <button id="miniNext" type="button" aria-label="Next song">⏭</button>
       <button id="miniAutoplay" type="button" aria-label="Toggle autoplay" aria-pressed="true">AUTO</button>
       <button id="miniLoop" type="button" aria-label="Toggle loop" aria-pressed="false">↻</button>
+      <div class="mini-popover-wrap">
+        <button id="miniShufflePlaylist" type="button" aria-label="Choose shuffle playlist" aria-expanded="false" aria-haspopup="dialog">📂</button>
+        <div id="miniShuffleMenu" class="mini-popover" hidden role="dialog" aria-label="Shuffle playlist selection">
+          <label for="miniShufflePlaylistSelect">Shuffle playlist</label>
+          <select id="miniShufflePlaylistSelect">
+            <option value="">Current queue</option>
+          </select>
+          <button id="miniShufflePlaylistApply" type="button">Use playlist</button>
+          <div id="miniShuffleStatus" class="mini-popover-status" aria-live="polite"></div>
+        </div>
+      </div>
       <button id="miniShuffle" type="button" aria-label="Toggle shuffle" aria-pressed="false">🔀</button>
+      <div class="mini-popover-wrap">
+        <button id="miniVolume" type="button" aria-label="Volume" aria-expanded="false" aria-haspopup="dialog">🔊</button>
+        <div id="miniVolumeMenu" class="mini-popover mini-volume-popover" hidden role="dialog" aria-label="Volume control">
+          <label for="miniVolumeSlider">Volume</label>
+          <input id="miniVolumeSlider" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+          <output id="miniVolumeValue">100%</output>
+        </div>
+      </div>
     </div>
     <div class="mini-progress">
       <span id="miniCurrentTime">0:00</span>

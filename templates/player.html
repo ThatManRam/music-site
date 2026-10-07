@@ -24,7 +24,9 @@ button.danger{background:#a52b2b}
 .mini-controls button.active{background:#24a148}
 .mini-controls button:disabled{opacity:.4;cursor:not-allowed}
 .mini-progress{grid-column:1 / -1;display:grid;grid-template-columns:auto minmax(80px,1fr) auto;gap:8px;align-items:center;font-size:.75rem;color:#aeb6c3}
-.mini-progress input{width:100%;margin:0;padding:0;accent-color:#2b6df3}
+.mini-progress-track{position:relative;width:100%;height:20px;display:flex;align-items:center}
+.mini-progress-track .mini-buffered{position:absolute;left:0;right:auto;top:50%;height:4px;transform:translateY(-50%);width:0;background:#70757d;border-radius:3px;pointer-events:none}
+.mini-progress-track input{position:relative;z-index:1;width:100%;margin:0;padding:0;accent-color:#2b6df3;background:transparent}
 .persistent-player audio{display:none}
 body{padding-bottom:92px}
 @media(max-width:600px){
@@ -52,7 +54,7 @@ body{padding-bottom:92px}
     </div>
     <div class="mini-progress">
       <span id="miniCurrentTime">0:00</span>
-      <input id="miniProgress" type="range" min="0" max="0" value="0" step="0.1" aria-label="Song position" disabled>
+      <div class="mini-progress-track" role="group" aria-label="Song loading and position"><div id="miniBuffered" class="mini-buffered" role="progressbar" aria-label="Buffered audio" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div><input id="miniProgress" type="range" min="0" max="0" value="0" step="0.1" aria-label="Song position" disabled></div>
       <span id="miniDuration">0:00</span>
     </div>
     <audio id="persistentAudio" preload="metadata" playsinline></audio>

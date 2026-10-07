@@ -11,13 +11,14 @@
     const loopButton = document.getElementById("miniLoop");
     const shuffleButton = document.getElementById("miniShuffle");
     const slider = document.getElementById("miniProgress");
+    const bufferedBar = document.getElementById("miniBuffered");
     const currentTimeLabel = document.getElementById("miniCurrentTime");
     const durationLabel = document.getElementById("miniDuration");
     const audio = document.getElementById("persistentAudio");
 
     if (!root || !title || !previousButton || !playButton || !nextButton ||
         !autoplayButton || !loopButton || !shuffleButton || !slider ||
-        !currentTimeLabel || !durationLabel || !audio) {
+        !currentTimeLabel || !durationLabel || !bufferedBar || !audio) {
         return;
     }
 
@@ -90,6 +91,30 @@
         slider.max = duration > 0 ? String(duration) : "0";
         slider.value = duration > 0 ? String(Math.min(current, duration)) : "0";
         slider.disabled = duration <= 0;
+
+        // Show how much of the current track the browser has buffered.
+        // Media buffers are exposed as time ranges, so use the range that
+        // contains the current playback position when possible.
+        let bufferedEnd = 0;
+        if (duration > 0 && audio.buffered.length > 0) {
+            for (let index = 0; index < audio.buffered.length; index += 1) {
+                try {
+                    const start = audio.buffered.start(index);
+                    const end = audio.buffered.end(index);
+                    if (current >= start - 0.25 && current <= end + 0.25) {
+                        bufferedEnd = end;
+                        break;
+                    }
+                    bufferedEnd = Math.max(bufferedEnd, end);
+                } catch (_) {}
+            }
+        }
+
+        const bufferedPercent = duration > 0
+            ? Math.max(0, Math.min(100, (bufferedEnd / duration) * 100))
+            : 0;
+        bufferedBar.style.width = `${bufferedPercent}%`;
+        bufferedBar.setAttribute("aria-valuenow", String(Math.round(bufferedPercent)));
     }
 
     function updateStateFromAudio() {
@@ -138,6 +163,19 @@
         title.textContent = "Now playing: " + (track.title || "Unknown song");
         syncCurrentTrackState();
         updateControls();
+        updateProgress();
+    }
+
+    function releaseMediaResource() {
+        // Clear the media element's resource selection. This does not control
+        // Safari's global HTTP cache, but it releases this page's active media
+        // resource/buffer so an old song is no longer attached to the player.
+        try {
+            audio.pause();
+            audio.removeAttribute("src");
+            audio.load();
+        } catch (_) {}
+        loadedUrl = "";
         updateProgress();
     }
 
@@ -198,8 +236,7 @@
                 switchingTrack = true;
                 audio.pause();
             }
-            audio.removeAttribute("src");
-            audio.load();
+            releaseMediaResource();
 
             loadedUrl = sourceUrl;
             audio.preload = "metadata";
@@ -435,6 +472,9 @@
     });
 
     audio.addEventListener("loadedmetadata", updateProgress);
+    audio.addEventListener("progress", updateProgress);
+    audio.addEventListener("canplay", updateProgress);
+    audio.addEventListener("durationchange", updateProgress);
 
     audio.addEventListener("ended", () => {
         if (state.loop) {
@@ -446,6 +486,9 @@
         } else {
             writeState({ playing: false, currentTime: audio.duration || 0 });
             updateControls();
+            // No next track is being loaded, so release the completed media
+            // resource instead of keeping its buffer attached indefinitely.
+            releaseMediaResource();
         }
     });
 

@@ -27,12 +27,13 @@
         currentTime: 0,
         playing: false,
         autoplay: true,
-        loop: true,
+        loop: false,
         shuffle: false,
         history: []
     };
 
     let intentionalPause = false;
+    let switchingTrack = false;
     let interruptedPlayback = false;
     let resumeTimer = null;
     let loadedUrl = "";
@@ -147,7 +148,15 @@
 
         root.hidden = false;
         title.textContent = "Now playing: " + (track.title || "Unknown song");
-        loadedUrl = track.url;
+
+        // HTMLMediaElement.src returns an absolute URL, while Flask url_for()
+        // commonly supplies a relative URL. Normalize before comparing so we do
+        // not unnecessarily reload the same MP3 every time it is selected.
+        const sourceUrl = new URL(track.url, window.location.href).href;
+        const sourceChanged = loadedUrl !== sourceUrl;
+        const startTime = restorePosition && Number.isFinite(state.currentTime)
+            ? Math.max(0, state.currentTime)
+            : 0;
 
         if ("mediaSession" in navigator && "MediaMetadata" in window) {
             navigator.mediaSession.metadata = new MediaMetadata({
@@ -157,15 +166,13 @@
             });
         }
 
-        const startTime = restorePosition && Number.isFinite(state.currentTime)
-            ? Math.max(0, state.currentTime)
-            : 0;
+        function restoreAndPlay() {
+            // A previous track may have had a pending metadata callback when
+            // the user skipped quickly. Ignore callbacks for any older source.
+            if (loadedUrl !== sourceUrl) {
+                return;
+            }
 
-        if (audio.src !== track.url) {
-            audio.src = track.url;
-        }
-
-        audio.addEventListener("loadedmetadata", function restoreAndPlay() {
             if (startTime > 0 && Number.isFinite(audio.duration)) {
                 try {
                     audio.currentTime = Math.min(startTime, audio.duration);
@@ -180,7 +187,31 @@
                     writeState({ playing: true });
                 });
             }
-        }, { once: true });
+        }
+
+        if (sourceChanged) {
+            // Explicitly release the previous media resource before attaching a
+            // new track. This is particularly helpful for Safari on iOS, which
+            // can otherwise retain old media buffers while a long queue plays.
+            if (!audio.paused) {
+                intentionalPause = true;
+                switchingTrack = true;
+                audio.pause();
+            }
+            audio.removeAttribute("src");
+            audio.load();
+
+            loadedUrl = sourceUrl;
+            audio.preload = "metadata";
+            audio.addEventListener("loadedmetadata", restoreAndPlay, { once: true });
+            audio.src = sourceUrl;
+            audio.load();
+        } else if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+            restoreAndPlay();
+        } else {
+            // Avoid stacking one-shot listeners if metadata is not ready yet.
+            audio.addEventListener("loadedmetadata", restoreAndPlay, { once: true });
+        }
 
         updateControls();
     }
@@ -219,7 +250,8 @@
 
         const safeIndex = Math.max(0, Math.min(index, queue.length - 1));
         const track = queue[safeIndex];
-        const wasDifferent = safeIndex !== state.currentIndex || audio.src !== track.url;
+        const trackUrl = track.url ? new URL(track.url, window.location.href).href : "";
+        const wasDifferent = safeIndex !== state.currentIndex || loadedUrl !== trackUrl;
 
         state.currentIndex = safeIndex;
         state.currentTime = wasDifferent ? 0 : state.currentTime;
@@ -372,6 +404,13 @@
 
     audio.addEventListener("pause", () => {
         updateProgress();
+
+        if (switchingTrack) {
+            switchingTrack = false;
+            intentionalPause = false;
+            updateControls();
+            return;
+        }
 
         if (!intentionalPause && audio.src && audio.currentTime > 0 &&
             (!Number.isFinite(audio.duration) || audio.currentTime < audio.duration - 0.25)) {

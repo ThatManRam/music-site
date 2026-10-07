@@ -21,6 +21,7 @@
     const volumeMenu = document.getElementById("miniVolumeMenu");
     const volumeSlider = document.getElementById("miniVolumeSlider");
     const volumeValue = document.getElementById("miniVolumeValue");
+    const volumeReset = document.getElementById("miniVolumeReset");
     const slider = document.getElementById("miniProgress");
     const bufferedBar = document.getElementById("miniBuffered");
     const currentTimeLabel = document.getElementById("miniCurrentTime");
@@ -31,7 +32,7 @@
         !autoplayButton || !loopButton || !shuffleButton || !shufflePlaylistButton ||
         !shuffleMenu || !shufflePlaylistOptions || !shufflePlaylistSelectAll || !shufflePlaylistClear ||
         !shufflePlaylistApply || !shuffleStatus ||
-        !volumeButton || !volumeMenu || !volumeSlider || !volumeValue || !slider ||
+        !volumeButton || !volumeMenu || !volumeSlider || !volumeValue || !volumeReset || !slider ||
         !currentTimeLabel || !durationLabel || !bufferedBar || !audio) {
         return;
     }
@@ -705,6 +706,11 @@
 
     volumeSlider.addEventListener("input", () => {
         setVolume(volumeSlider.value);
+    });
+
+    volumeReset.addEventListener("click", () => {
+        setVolume(1);
+        volumeSlider.focus();
     });
 
     document.addEventListener("click", event => {

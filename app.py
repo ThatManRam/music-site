@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,6 +38,7 @@ if load_dotenv is not None:
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
+RESET_SCRIPT = BASE_DIR / "reset.sh"
 STATE_DIR = Path(os.environ.get("MUSIC_STATE_DIR", BASE_DIR / "state")).resolve()
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1812,6 +1814,47 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.post("/reset")
+@login_required
+def reset_application():
+    if not rate_limit("reset-request", 1, 60):
+        flash("Reset is already being started. Please wait a moment.", "error")
+        return redirect(url_for("index"))
+
+    if not RESET_SCRIPT.is_file() or RESET_SCRIPT.is_symlink():
+        flash("reset.sh was not found in the application directory.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        RESET_SCRIPT.chmod(RESET_SCRIPT.stat().st_mode | 0o100)
+    except OSError:
+        pass
+
+    log_path = STATE_DIR / "reset.log"
+
+    try:
+        log_handle = log_path.open("ab")
+        subprocess.Popen(
+            ["/bin/bash", str(RESET_SCRIPT)],
+            cwd=str(BASE_DIR),
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+        flash("Reset script started.", "success")
+    except OSError:
+        app.logger.exception("Failed to start reset.sh")
+        try:
+            log_handle.close()
+        except UnboundLocalError:
+            pass
+        flash("Could not start reset.sh.", "error")
+
+    return redirect(url_for("index"))
 
 
 @app.post("/download")

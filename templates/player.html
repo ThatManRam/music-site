@@ -42,7 +42,7 @@ button.danger{background:#a52b2b}
 .mini-volume-note{font-size:.7rem;line-height:1.3;color:#aeb6c3}
 .mini-volume-popover{min-width:190px}
 .mini-volume-popover input[type="range"]{padding:0;accent-color:#2b6df3}
-.mini-volume-popover output{font-size:.8rem;color:#aeb6c3;text-align:right}
+.mini-volume-popover output{font-size:.8rem;color:#aeb6c3;text-align:right}.mini-volume-reset{width:100%;margin-top:8px;padding:7px 10px;border:1px solid #4b5563;border-radius:6px;background:#222831;color:#f3f4f6;cursor:pointer}.mini-volume-reset:hover{background:#2f3742}
 .mini-progress{grid-column:1 / -1;display:grid;grid-template-columns:auto minmax(80px,1fr) auto;gap:8px;align-items:center;font-size:.75rem;color:#aeb6c3}
 .mini-progress-track{position:relative;width:100%;height:20px;display:flex;align-items:center}
 .mini-progress-track .mini-buffered{position:absolute;left:0;right:auto;top:50%;height:4px;transform:translateY(-50%);width:0;background:#70757d;border-radius:3px;pointer-events:none}
@@ -91,6 +91,7 @@ body{padding-bottom:92px}
           <label for="miniVolumeSlider">0–200%</label>
           <input id="miniVolumeSlider" type="range" min="0" max="2" step="0.01" value="1" aria-label="Volume and amplification" aria-valuemin="0" aria-valuemax="200" aria-valuenow="100" aria-valuetext="100%">
           <output id="miniVolumeValue">100%</output>
+          <button id="miniVolumeReset" type="button" class="mini-volume-reset">Reset to 100%</button>
           <div class="mini-volume-note">Above 100% uses audio amplification. Very high levels can cause clipping or distortion.</div>
         </div>
       </div>

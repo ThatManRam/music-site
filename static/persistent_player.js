@@ -75,6 +75,14 @@
     let gainNode = null;
 
     function ensureAudioGraph() {
+        // Do not create a Web Audio graph for normal 0-100% playback.
+        // iOS Safari handles a plain <audio> element much more reliably for
+        // background/Lock Screen playback. The graph is only needed once the
+        // user explicitly asks for amplification above 100%.
+        if (Number(state.volume) <= 1 && !audioContext) {
+            return false;
+        }
+
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         if (!AudioContextClass) {
             return false;
@@ -97,6 +105,16 @@
             return true;
         } catch (_) {
             return false;
+        }
+    }
+
+    function preparePlaybackAudio() {
+        if (Number(state.volume) > 1) {
+            ensureAudioGraph();
+        } else if (!audioContext) {
+            audio.volume = Math.max(0, Math.min(1, Number(state.volume)));
+        } else {
+            applyGain();
         }
     }
 
@@ -156,10 +174,18 @@
     function setVolume(value) {
         const volume = Math.max(0, Math.min(2, Number(value)));
         writeState({ volume });
-        if (ensureAudioGraph()) {
+        if (volume > 1) {
+            if (ensureAudioGraph()) {
+                applyGain();
+            } else {
+                audio.volume = 1;
+            }
+        } else if (audioContext) {
             applyGain();
         } else {
-            audio.volume = Math.min(1, volume);
+            // Keep ordinary playback on the native media element. This is
+            // important for reliable iOS Safari background playback.
+            audio.volume = volume;
         }
         updateVolumeUi();
     }
@@ -496,7 +522,7 @@
             updateProgress();
 
             if (shouldPlay) {
-                ensureAudioGraph();
+                preparePlaybackAudio();
                 audio.play().catch(() => {
                     interruptedPlayback = true;
                     writeState({ playing: true });
@@ -661,7 +687,7 @@
                 return;
             }
 
-            ensureAudioGraph();
+            preparePlaybackAudio();
             audio.play().catch(() => {});
         }, 300);
     }
@@ -732,7 +758,7 @@
         if (audio.paused) {
             intentionalPause = false;
             interruptedPlayback = false;
-            ensureAudioGraph();
+            preparePlaybackAudio();
             audio.play().catch(() => {});
         } else {
             intentionalPause = true;
@@ -979,8 +1005,11 @@
         }
     }
 
-    if (!ensureAudioGraph()) {
-        audio.volume = Math.min(1, state.volume);
+    // Leave the audio element on native HTMLMediaElement playback until the
+    // user explicitly requests >100% amplification. Creating AudioContext at
+    // page load can interfere with iOS Safari background playback.
+    if (Number(state.volume) <= 1) {
+        audio.volume = Math.max(0, Math.min(1, Number(state.volume)));
     }
     updateVolumeUi();
     updateControls();

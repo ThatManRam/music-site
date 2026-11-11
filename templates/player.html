@@ -245,8 +245,18 @@ async function moveSong(song, destination) {
         item => !(item.path === song.path && item.drive_index === song.drive_index)
     );
 
+    // Use the location the server reports. The file may now live on another
+    // drive and always has a new URL; keeping the old url/drive_index made
+    // the moved song unplayable (404) and broke any further move.
     playlists[destination] = playlists[destination] || [];
-    playlists[destination].push({ ...song, path: destination + "/" + song.filename });
+    playlists[destination].push({
+        ...song,
+        title: data.title || song.title,
+        filename: data.filename || song.filename,
+        drive_index: Number.isInteger(data.drive_index) ? data.drive_index : song.drive_index,
+        path: data.path || (destination + "/" + song.filename),
+        url: data.url || song.url
+    });
 
     renderSongs();
 }

@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
@@ -10,3 +11,6 @@ cookies.txt
 *.cookies.txt
 
 state/notices/
+
+*.tmp
+reset.log

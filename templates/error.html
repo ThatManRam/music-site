@@ -48,7 +48,7 @@ a{color:#80aaff}
 
     function save(updates) {
         state = Object.assign(state || {}, updates);
-        localStorage.setItem(storageKey, JSON.stringify(state));
+        try { localStorage.setItem(storageKey, JSON.stringify(state)); } catch (_) {}
     }
 
     function updateButton() {

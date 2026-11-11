@@ -318,10 +318,14 @@ async function renameSong(row, song) {
         song.url = data.url;
         row.dataset.path = data.path;
 
-        const titleElement = row.querySelector(".song-title");
-        const audio = row.querySelector("audio");
-        titleElement.textContent = data.title;
-        audio.src = data.url;
+        // The row has no <audio> element (playback goes through the mini
+        // player), so only the title and the stored URL need updating. The
+        // old code threw here after the server had already renamed the file,
+        // and the Play button kept pointing at the old, now missing, URL.
+        row.dataset.url = data.url;
+        row.querySelector(".song-title").textContent = data.title;
+        row.querySelector(".song-meta").textContent =
+            `${song.size} · Drive ${song.drive_index + 1}`;
         setStatus(`Renamed to ${data.title}.`);
     } catch (error) {
         setStatus(error.message || "Could not rename song.");

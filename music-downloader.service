@@ -40,7 +40,8 @@ ReadWritePaths=/var/lib/music-downloader
 ReadWritePaths=/mnt/CENMATE_250GB/music
 ReadWritePaths=/mnt/CENMATE_640GB/music
 
-# Allow read/write access to the executable environment.
+# The application code, virtualenv and deno are read-only to the service;
+# only the ReadWritePaths above are writable.
 ReadOnlyPaths=/home/pi/music-site
 ReadOnlyPaths=/home/pi/.deno
 

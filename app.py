@@ -207,6 +207,10 @@ def yt_dlp_common_options(use_cookies=True, youtube_client_mode="authenticated")
     """
     options = {
         "remote_components": ["ejs:github"],
+        # The service user's home is read-only under ProtectHome, so keep
+        # yt-dlp's cache (including the downloaded JS challenge solver) in
+        # the writable state directory instead of ~/.cache.
+        "cachedir": str(STATE_DIR / "yt-dlp-cache"),
         **yt_dlp_logging_options(),
     }
 
@@ -345,6 +349,12 @@ def extract_metadata_with_youtube_fallback(url, options):
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+
+if shutil.which("ffmpeg") is None:
+    app.logger.warning(
+        "ffmpeg was not found on PATH; MP3 conversion will fail. "
+        "Install it with: sudo apt install ffmpeg"
+    )
 app.config.update(
     MAX_CONTENT_LENGTH=MAX_REQUEST_BYTES,
     SESSION_COOKIE_HTTPONLY=True,
@@ -460,11 +470,27 @@ def rate_limit(bucket_name, maximum, window_seconds, ip_address=None):
 # Authentication / CSRF
 # ---------------------------------------------------------------------------
 
+def wants_json():
+    """True for fetch()/API callers, which must get JSON instead of HTML.
+
+    The page scripts call endpoints such as /download or /create-playlist
+    (not under /api/) with fetch() and immediately parse the reply as JSON.
+    Redirecting them to the login page or answering with an HTML error page
+    makes response.json() throw an unhelpful "Unexpected token <" error.
+    """
+    return (
+        request.path.startswith("/api/")
+        or request.is_json
+        or "X-CSRFToken" in request.headers
+        or request.accept_mimetypes.best == "application/json"
+    )
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("authenticated"):
-            if request.path.startswith("/api/"):
+            if wants_json():
                 return jsonify(error="authentication required"), 401
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
@@ -482,7 +508,7 @@ def csrf_token():
 
 @app.context_processor
 def inject_security_helpers():
-    return {"csrf_token": csrf_token(), "csp_nonce": g.csp_nonce}
+    return {"csrf_token": csrf_token(), "csp_nonce": g.get("csp_nonce", "")}
 
 
 def require_csrf():
@@ -600,14 +626,14 @@ def resolve_soundcloud_short_url(value):
         return value
 
     try:
-        request = Request(
+        head_request = Request(
             value,
             method="HEAD",
             headers={
                 "User-Agent": "Mozilla/5.0 (compatible; MusicDownloader/1.0)",
             },
         )
-        with urlopen(request, timeout=10) as response:
+        with urlopen(head_request, timeout=10) as response:
             resolved_url = response.geturl()
     except Exception as error:
         app.logger.warning(
@@ -645,10 +671,16 @@ def validate_drive_index(value):
     return index
 
 
-def safe_path_under(root, relative_path):
+def safe_path_under(root, relative_path, reject_symlinks=True):
     """
     Resolve a user-controlled path and prove that it remains below root.
     Returns None if traversal/symlink escape is detected.
+
+    With reject_symlinks (the default) any symbolic link between root and the
+    target is refused too. resolve() silently follows links, so without this
+    check a link such as music/Link -> music/Other would make "delete Link"
+    remove Other's files, and the later ``is_symlink()`` checks on the already
+    resolved path could never be true.
     """
     root = root.resolve()
 
@@ -661,6 +693,16 @@ def safe_path_under(root, relative_path):
         candidate.relative_to(root)
     except ValueError:
         return None
+
+    if reject_symlinks:
+        current = root
+        try:
+            for part in Path(relative_path).parts:
+                current = current / part
+                if current.is_symlink():
+                    return None
+        except OSError:
+            return None
 
     return candidate
 
@@ -699,10 +741,35 @@ def validate_song_path(relative_path):
 # Filesystem helpers
 # ---------------------------------------------------------------------------
 
-def ensure_music_locations():
+def ensure_music_locations(create_roots=False):
+    """Make sure every configured music root has its Singles folder.
+
+    gunicorn imports ``app:app`` and never runs the ``__main__`` block, so this
+    also runs at import time. Without it a fresh install has no "Singles"
+    playlist: it is listed in the UI but "Playlist does not exist." is returned
+    when you try to use it.
+
+    Music roots are only created when ``create_roots`` is true (development
+    run). A missing root usually means an external drive is not mounted, and
+    creating the directory would silently fill the SD card instead.
+    """
     for root in MUSIC_LOCATIONS:
-        root.mkdir(parents=True, exist_ok=True)
-        (root / SINGLES_FOLDER).mkdir(parents=True, exist_ok=True)
+        try:
+            if create_roots:
+                root.mkdir(parents=True, exist_ok=True)
+            elif not root.is_dir():
+                app.logger.warning(
+                    "Music directory %s does not exist (drive not mounted?)", root
+                )
+                continue
+            (root / SINGLES_FOLDER).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            app.logger.warning(
+                "Could not prepare music directory %s", root, exc_info=True
+            )
+
+
+ensure_music_locations()
 
 
 def format_bytes(value):
@@ -776,7 +843,11 @@ def get_playlist_names():
     for root in MUSIC_LOCATIONS:
         try:
             for item in root.iterdir():
-                if item.is_dir() and validate_playlist_name(item.name):
+                if (
+                    item.is_dir()
+                    and not item.is_symlink()
+                    and validate_playlist_name(item.name)
+                ):
                     names.add(item.name)
         except OSError:
             continue
@@ -832,6 +903,11 @@ def delete_playlist(name):
     if name.casefold() == SINGLES_FOLDER.casefold():
         return False, "Singles cannot be deleted."
 
+    # Refuse symlinked playlist directories before deleting anything anywhere.
+    for root in MUSIC_LOCATIONS:
+        if (root / name).is_symlink():
+            return False, "Refusing to delete a symbolic link."
+
     found = False
 
     for root in MUSIC_LOCATIONS:
@@ -841,11 +917,6 @@ def delete_playlist(name):
             continue
 
         found = True
-
-        # Refuse symlink directories even though resolve() protects traversal.
-        if directory.is_symlink():
-            return False, "Refusing to delete a symbolic link."
-
         shutil.rmtree(directory)
 
     if not found:
@@ -854,7 +925,24 @@ def delete_playlist(name):
     return True, f"Deleted playlist '{name}'."
 
 
-def clean_filename(value):
+# Linux filesystems limit a single name to 255 *bytes*, not characters. Keep a
+# generous margin below that for the ".mp3" extension.
+MAX_FILENAME_BYTES = 200
+
+
+def truncate_utf8(value, max_bytes):
+    """Cut a string to at most max_bytes of UTF-8 without splitting a character."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def clean_filename(value, default="Unknown"):
+    """Return a filesystem-safe name (without extension).
+
+    Returns ``default`` when nothing usable is left after sanitising.
+    """
     value = str(value)
 
     # Remove characters that are problematic in filenames.
@@ -862,10 +950,15 @@ def clean_filename(value):
     value = re.sub(r'[<>:"/\\|?*]', "_", value)
     value = re.sub(r"\s+", " ", value).strip(" .")
 
-    if not value:
-        value = "Unknown"
+    value = value[:MAX_FILENAME_LENGTH - 4]
+    # Japanese/Korean/emoji titles are 3-4 bytes per character, so a title
+    # that is short in characters can still exceed the filesystem limit.
+    value = truncate_utf8(value, MAX_FILENAME_BYTES).strip(" .")
 
-    return value[:MAX_FILENAME_LENGTH - 4]
+    if not value:
+        return default
+
+    return value
 
 
 def normalize_title(value):
@@ -911,7 +1004,7 @@ def get_library_playlist(playlist_name):
     for drive_index, root in enumerate(MUSIC_LOCATIONS):
         directory = playlist_path(drive_index, playlist_name)
 
-        if not directory or not directory.is_dir() or directory.is_symlink():
+        if not directory or not directory.is_dir():
             continue
 
         try:
@@ -1545,15 +1638,17 @@ def download_music(url, playlist_name, quality, job_id=None, ip_address=None):
     if playlist_name and not playlist_exists(playlist_name):
         return False, "Playlist does not exist."
 
-    if not rate_limit(
-        "download", MAX_DOWNLOADS_PER_WINDOW, DOWNLOAD_WINDOW_SECONDS, ip_address
-    ):
-        return False, "Too many downloads. Try again later."
-
     if not download_lock.acquire(blocking=False):
         return False, "A download is already in progress."
 
     try:
+        # Checked after the lock so that an attempt rejected with "already in
+        # progress" does not use up one of the few downloads allowed per window.
+        if not rate_limit(
+            "download", MAX_DOWNLOADS_PER_WINDOW, DOWNLOAD_WINDOW_SECONDS, ip_address
+        ):
+            return False, "Too many downloads. Try again later."
+
         max_items = MAX_PLAYLIST_ITEMS if is_playlist else 1
 
         if job_id:
@@ -1587,6 +1682,18 @@ def download_music(url, playlist_name, quality, job_id=None, ip_address=None):
             info = extract_metadata_with_youtube_fallback(
                 validated_url, options
             )
+
+            # SoundCloud sets, channels and similar URLs come back as a
+            # playlist without a duration. Say so instead of reporting a
+            # confusing "(duration unavailable)" for the playlist title.
+            if not isinstance(info, dict) or info.get("entries") or info.get(
+                "_type"
+            ) in {"playlist", "multi_video"}:
+                return False, (
+                    "That URL is a playlist or collection. Paste a single track "
+                    "URL, or a youtube.com/playlist?list=... link."
+                )
+
             entries = [info]
 
         if is_playlist:
@@ -1799,6 +1906,7 @@ def login():
             if (
                 next_url.startswith("/")
                 and not next_url.startswith("//")
+                and "\\" not in next_url
             ):
                 return redirect(next_url)
 
@@ -1841,13 +1949,13 @@ def reset_application():
             close_fds=True,
         )
         log_handle.close()
-    except OSError as exc:
+    except OSError:
         try:
             log_handle.close()
         except Exception:
             pass
         app.logger.exception("Could not start reset script")
-        return jsonify(error=f"Could not start reset.sh: {exc}"), 500
+        return jsonify(error="Could not start reset.sh. See the server log."), 500
 
     return jsonify(message="Reset started. The server may restart shortly.", pid=process.pid), 202
 
@@ -1879,9 +1987,15 @@ def start_download():
     ip_address = client_ip()
 
     def worker():
-        ok, message = download_music(
-            url, playlist, quality, job_id=job_id, ip_address=ip_address
-        )
+        try:
+            ok, message = download_music(
+                url, playlist, quality, job_id=job_id, ip_address=ip_address
+            )
+        except Exception:
+            # Without this the job would stay "queued"/"running" forever and
+            # the browser would poll it until the job expired.
+            app.logger.exception("Download worker crashed")
+            ok, message = False, "Download failed."
         update_download_job(
             job_id,
             status="completed" if ok else "error",
@@ -2021,8 +2135,10 @@ def rename_library_song():
 
     # Reuse the filename sanitizer, then require a non-empty result. The
     # extension is always controlled by the server.
-    new_stem = clean_filename(requested_name)
-    if not new_stem or new_stem.casefold() in {".", ".."}:
+    # default=None: a name made only of dots/spaces/control characters must be
+    # rejected, not silently turned into "Unknown.mp3".
+    new_stem = clean_filename(requested_name, default=None)
+    if not new_stem:
         return jsonify(error="Invalid song name."), 400
 
     root = MUSIC_LOCATIONS[drive_index]
@@ -2055,9 +2171,7 @@ def rename_library_song():
         app.logger.exception("Song rename failed: %s", relative_path)
         return jsonify(error="Could not rename song."), 500
 
-    new_relative_path = str(Path(relative_path).parent / destination.name)
-    if new_relative_path.startswith("."):
-        new_relative_path = destination.name
+    new_relative_path = Path(relative_path).with_name(destination.name).as_posix()
 
     return jsonify(
         message="Song renamed successfully.",
@@ -2225,21 +2339,28 @@ def move_song():
 
     filename = source.name
 
-    # Prefer an existing destination playlist directory.
+    # Prefer a destination directory on the SAME drive as the source: that is
+    # an atomic rename (no copy, no extra free space needed, can't be left
+    # half-written). Otherwise use the first other drive that has the playlist.
+    drive_order = [source_drive] + [
+        index for index in range(len(MUSIC_LOCATIONS)) if index != source_drive
+    ]
     destination = None
+    destination_drive = None
 
-    for root in MUSIC_LOCATIONS:
-        candidate = playlist_path(
-            MUSIC_LOCATIONS.index(root),
-            destination_playlist,
-        )
+    for drive_index in drive_order:
+        candidate = playlist_path(drive_index, destination_playlist)
 
         if candidate and candidate.is_dir():
             destination = candidate
+            destination_drive = drive_index
             break
 
     if destination is None:
         return jsonify(error="Destination directory unavailable."), 400
+
+    if destination == source.parent:
+        return jsonify(error="The song is already in that playlist."), 409
 
     destination_file = safe_path_under(destination, filename)
 
@@ -2251,27 +2372,35 @@ def move_song():
 
     try:
         shutil.move(str(source), str(destination_file))
-
-        # Remove an empty non-Singles source playlist directory.
-        source_parent = source.parent
-
-        if (
-            source_parent.name.casefold()
-            != SINGLES_FOLDER.casefold()
-            and source_parent.is_dir()
-        ):
+    except Exception:
+        # A cross-drive move is copy-then-delete. If the copy fails part-way
+        # (target drive full, unplugged...) remove the partial file, but only
+        # while the original is still intact.
+        if source.exists() and destination_file.exists():
             try:
-                next(source_parent.iterdir())
-            except StopIteration:
-                source_parent.rmdir()
+                destination_file.unlink()
             except OSError:
                 pass
-
-        return jsonify(message="Song moved successfully.")
-
-    except Exception:
         app.logger.exception("Song move failed")
         return jsonify(error="Could not move song."), 500
+
+    # Emptied playlists are deliberately kept. They are created explicitly
+    # (and deleted explicitly), and silently removing one left the Player page
+    # listing a playlist the server no longer had.
+    relative = f"{destination_playlist}/{destination_file.name}"
+
+    return jsonify(
+        message="Song moved successfully.",
+        title=destination_file.stem,
+        filename=destination_file.name,
+        drive_index=destination_drive,
+        path=relative,
+        url=url_for(
+            "serve_music",
+            drive_index=destination_drive,
+            filename=relative,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2280,7 +2409,7 @@ def move_song():
 
 @app.errorhandler(HTTPException)
 def handle_http_error(error):
-    if request.path.startswith("/api/"):
+    if wants_json():
         return jsonify(error=error.description), error.code
 
     return render_template(
@@ -2294,7 +2423,7 @@ def handle_http_error(error):
 def handle_unexpected_error(error):
     app.logger.exception("Unhandled application error")
 
-    if request.path.startswith("/api/"):
+    if wants_json():
         return jsonify(error="Internal server error."), 500
 
     return render_template(
@@ -2314,13 +2443,15 @@ def security_headers(response):
     )
 
     # This application uses no third-party JavaScript.
+    nonce = g.get("csp_nonce")
+    script_src = "'self'" + (f" 'nonce-{nonce}'" if nonce else "")
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "base-uri 'self'; "
         "form-action 'self'; "
         "frame-ancestors 'none'; "
         "object-src 'none'; "
-        f"script-src 'self' 'nonce-{g.csp_nonce}'; "
+        f"script-src {script_src}; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
         "media-src 'self'; "
@@ -2341,7 +2472,7 @@ def security_headers(response):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    ensure_music_locations()
+    ensure_music_locations(create_roots=True)
 
     # Development server is acceptable for initial LAN testing only.
     # For the hardened deployment, use gunicorn/systemd as described below.

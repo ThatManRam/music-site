@@ -137,9 +137,31 @@
         }
     }
 
+    function persistState() {
+        // localStorage.setItem throws in Safari private mode and when the
+        // quota is exceeded. An uncaught throw inside the audio event
+        // handlers skipped the rest of the handler (e.g. the play/pause
+        // button never updated), so persistence is strictly best-effort.
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        } catch (_) {}
+    }
+
     function writeState(updates) {
         state = Object.assign({}, state, updates);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        persistState();
+    }
+
+    // Keep only what is needed to play and display a track. The Player page
+    // passes full song objects (sizes, filenames...), which made every state
+    // save needlessly large for big libraries.
+    function slimTrack(item) {
+        return {
+            title: item.title || "",
+            url: item.url,
+            path: item.path || "",
+            drive_index: item.drive_index ?? null
+        };
     }
 
     function formatTime(seconds) {
@@ -418,10 +440,21 @@
         bufferedBar.setAttribute("aria-valuenow", String(Math.round(bufferedPercent)));
     }
 
+    let lastPositionSave = 0;
+
     function updateStateFromAudio() {
         if (!audio.src) {
             return;
         }
+
+        // timeupdate fires several times a second. Saving the position once
+        // a second is plenty for resuming and avoids rewriting the whole
+        // queue to localStorage continuously. play/pause still save at once.
+        const now = Date.now();
+        if (now - lastPositionSave < 1000) {
+            return;
+        }
+        lastPositionSave = now;
 
         const queue = Array.isArray(state.queue) ? state.queue : [];
         const track = queue[state.currentIndex];
@@ -447,7 +480,7 @@
         state.title = track.title || "Unknown song";
         state.path = track.path || "";
         state.drive_index = track.drive_index ?? null;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        persistState();
     }
 
     function showCurrentTrack() {
@@ -558,7 +591,7 @@
 
     function setQueue(queue, index, playlist, shouldPlay) {
         const cleanQueue = Array.isArray(queue)
-            ? queue.filter(item => item && item.url)
+            ? queue.filter(item => item && item.url).map(slimTrack)
             : [];
 
         if (!cleanQueue.length) {
@@ -580,7 +613,7 @@
             history: [safeIndex]
         });
 
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        persistState();
         playIndex(safeIndex, Boolean(shouldPlay));
     }
 
@@ -611,7 +644,7 @@
             state.history = history.slice(-100);
         }
 
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        persistState();
         loadTrack(track, Boolean(shouldPlay), !wasDifferent);
         updateControls();
     }
@@ -663,7 +696,7 @@
             history.pop();
             previousIndex = history[history.length - 1];
             state.history = history;
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            persistState();
         } else {
             previousIndex = (state.currentIndex - 1 + queue.length) % queue.length;
         }
@@ -893,15 +926,28 @@
     window.addEventListener("focus", attemptResume);
     window.addEventListener("pageshow", attemptResume);
 
+    let navigationCounter = 0;
+
     function navigate(url, replace) {
+        // If two navigations overlap, only the most recent one may update
+        // the page; otherwise a slow older response replaced the newer page.
+        const navigationId = ++navigationCounter;
+
         fetch(url, { headers: { "X-Requested-With": "SPA-Navigation" } })
             .then(response => {
-                if (!response.ok) {
+                // An expired session redirects to /login. Swapping the login
+                // form into <main> under the old URL made it POST to that URL
+                // (405), so fall back to a normal page load instead.
+                if (!response.ok || new URL(response.url).pathname === "/login") {
                     throw new Error("Navigation failed");
                 }
                 return response.text();
             })
             .then(html => {
+                if (navigationId !== navigationCounter) {
+                    return;
+                }
+
                 const parser = new DOMParser();
                 const documentFromResponse = parser.parseFromString(html, "text/html");
                 const nextMain = documentFromResponse.querySelector("main");

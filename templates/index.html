@@ -331,7 +331,17 @@ downloadForm.addEventListener("submit", async (event) => {
             throw new Error(data.error || "Could not start download.");
         }
 
-        await pollDownload(data.job_id);
+        try {
+            await pollDownload(data.job_id);
+        } catch (error) {
+            // The job was accepted; only the status polling failed (server
+            // restarted, Wi-Fi dropped...). Don't claim it failed to start.
+            progressPhase.textContent = "Lost contact with the server";
+            progressMessage.textContent =
+                "The download may still be running. Check the Library in a minute.";
+            downloadButton.disabled = false;
+            downloadButton.textContent = "Download";
+        }
     } catch (error) {
         progressPhase.textContent = "Failed to start download";
         progressMessage.textContent = error.message || "Download failed.";

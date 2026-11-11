@@ -6,8 +6,8 @@ sudo apt update
 sudo apt install ffmpeg python3-venv
 
 cd /path/to/music-downloader
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 
 ## 2. Create a password hash
@@ -42,7 +42,7 @@ mkdir -p "$MUSIC_STATE_DIR"
 
 ## 5. Start for LAN testing
 
-source venv/bin/activate
+source .venv/bin/activate
 python3 app.py
 
 Find your LAN IP:
@@ -167,10 +167,6 @@ Some YouTube formats may still be unavailable because they require a GVS PO Toke
 That warning does not necessarily prevent a download; yt-dlp can select another
 usable format. The application does not hard-code or store PO Tokens.
 
-Download results are stored server-side under `state/notices/`; the Flask session
-cookie only stores a short notice ID, preventing large playlist results from
-overflowing browser cookie limits.
-
 ## SoundCloud / YouTube download fix
 
 This build keeps the original submitted URL for the actual download. This is important for SoundCloud share links such as `https://on.soundcloud.com/...`, because yt-dlp may expose an internal/embed URL in extracted metadata that is not itself a downloadable URL.
@@ -178,7 +174,7 @@ This build keeps the original submitted URL for the actual download. This is imp
 The build also:
 
 - allows `on.soundcloud.com` through URL validation;
-- allows yt-dlp's `generic` extractor so SoundCloud short links can follow their redirect;
+- resolves `on.soundcloud.com` share links to their canonical `soundcloud.com` URL before handing them to yt-dlp;
 - keeps YouTube and SoundCloud explicitly allowlisted;
 - keeps the existing authenticated YouTube cookie/Deno path and public YouTube fallback;
 - enables verbose yt-dlp diagnostics by default through `MUSIC_YTDLP_VERBOSE=1`;
@@ -197,6 +193,10 @@ The Library page does not load every MP3 when it opens. It first loads only the 
 Songs in the selected playlist can be renamed or deleted from the Library page. Rename keeps the `.mp3` extension controlled by the server and stays inside the current playlist directory. Delete permanently removes the selected MP3 after confirmation.
 
 The Player page still uses the complete library view because it is intended to expose the combined player library.
+
+New downloads and new playlists are placed on the music drive with the most free space (a drive needs at least 2 GB free). A playlist can exist on more than one drive; the Library and Player pages show the songs from all of them together.
+
+Moving a song keeps it on the same drive whenever the destination playlist exists there (a simple rename); only otherwise is it copied to another drive. A playlist that becomes empty after a move is kept; delete playlists explicitly with **Delete playlist**.
 
 
 ## Downloader Reset button
@@ -227,3 +227,36 @@ chmod +x reset.sh
 The button does **not** embed the reset commands in the Flask application; it runs the `reset.sh` file that is present beside `app.py`. This means updating `reset.sh` on the Raspberry Pi changes what the button runs.
 
 Because `reset.sh` restarts the service, the endpoint deliberately returns before the script completes. If the service account needs `sudo` permission for `systemctl restart music-site` or permission to run `git pull`, configure those permissions for the account running the music service.
+
+Note: the hardened systemd unit in this repository makes the application directory
+read-only (`ReadOnlyPaths`) and sets `NoNewPrivileges=true`. With that unit a
+`reset.sh` that runs `git pull` or `sudo systemctl restart ...` will fail. `reset.sh`
+itself is not part of this repository, so create it on the Pi (and add it to
+`.gitignore` if it should stay local) or relax those two settings for the reset use case.
+
+## 11. Running as a systemd service
+
+The unit file in the repository is `music-downloader.service`; install it under the
+name used elsewhere in this README (`music-site`):
+
+    sudo mkdir -p /etc/music-downloader /var/lib/music-downloader
+    sudo cp .env.example /etc/music-downloader/music-server.env   # then edit the values
+    sudo chown root:kiosk /etc/music-downloader/music-server.env
+    sudo chmod 640 /etc/music-downloader/music-server.env
+    sudo chown kiosk:kiosk /var/lib/music-downloader
+    sudo cp music-downloader.service /etc/systemd/system/music-site.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now music-site
+
+Adjust `User=`, `WorkingDirectory=`, the `ExecStart` path and the `ReadWritePaths=`
+lines to match your Pi. The music drives must be mounted before the service starts;
+a music directory that does not exist is skipped (with a warning in the log) instead
+of being created on the SD card.
+
+## Known limitations
+
+- Playlist names are limited to ASCII letters, digits, spaces and `_ ( ) ' & . -`.
+  A YouTube playlist whose title is in another script gets underscores in the
+  automatically created playlist name.
+- Track titles are stored as file names, truncated to a filesystem-safe length.
+- Rate limiting and the download lock are in-process, so keep Gunicorn at one worker.
